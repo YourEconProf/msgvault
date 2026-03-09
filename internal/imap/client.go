@@ -181,20 +181,104 @@ func (c *Client) listMailboxesLocked() ([]string, error) {
 	return names, nil
 }
 
-// buildMessageListCache enumerates all mailboxes and populates c.messageListCache.
+// gmailAllMailFolder is the standard Gmail IMAP virtual folder that
+// contains every message in the account.
+const gmailAllMailFolder = "[Gmail]/All Mail"
+
+// mailboxesForListing returns the mailboxes to enumerate during a full
+// sync. On Gmail IMAP the same physical message appears in multiple
+// virtual folders (e.g. INBOX, Sent, All Mail), so listing all of
+// them produces duplicates. When the server has [Gmail]/All Mail we
+// enumerate only that folder — it contains every message exactly once.
+func mailboxesForListing(all []string) []string {
+	for _, mb := range all {
+		if mb == gmailAllMailFolder {
+			return []string{gmailAllMailFolder}
+		}
+	}
+	return all
+}
+
+// enumerateMailbox lists all UIDs in a single mailbox. It handles
+// network errors with one reconnect attempt.
+func (c *Client) enumerateMailbox(
+	ctx context.Context, mailbox string,
+) ([]imap.UID, error) {
+	if err := c.selectMailbox(mailbox); err != nil {
+		if isNetworkError(err) {
+			c.logger.Warn("network error selecting mailbox, reconnecting",
+				"mailbox", mailbox, "error", err)
+			if reconErr := c.reconnect(ctx); reconErr != nil {
+				return nil, fmt.Errorf(
+					"reconnect failed listing mailbox %q: %w",
+					mailbox, reconErr)
+			}
+			if err := c.selectMailbox(mailbox); err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+
+	searchData, err := c.conn.UIDSearch(
+		&imap.SearchCriteria{},
+		&imap.SearchOptions{ReturnAll: true},
+	).Wait()
+	if err != nil {
+		if isNetworkError(err) {
+			c.logger.Warn("network error during UID SEARCH, reconnecting",
+				"mailbox", mailbox, "error", err)
+			if reconErr := c.reconnect(ctx); reconErr != nil {
+				return nil, fmt.Errorf(
+					"reconnect failed searching mailbox %q: %w",
+					mailbox, reconErr)
+			}
+			if selErr := c.selectMailbox(mailbox); selErr != nil {
+				return nil, selErr
+			}
+			searchData, err = c.conn.UIDSearch(
+				&imap.SearchCriteria{},
+				&imap.SearchOptions{ReturnAll: true},
+			).Wait()
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
+	}
+
+	uidSet, ok := searchData.All.(imap.UIDSet)
+	if !ok {
+		return nil, nil
+	}
+	uids, _ := uidSet.Nums()
+	return uids, nil
+}
+
+// buildMessageListCache enumerates mailboxes and populates
+// c.messageListCache. On Gmail IMAP only [Gmail]/All Mail is
+// enumerated to avoid duplicate imports of the same physical message.
 // Caller must hold mu and have an active connection.
 func (c *Client) buildMessageListCache(ctx context.Context) error {
-	mailboxes, err := c.listMailboxesLocked()
+	allMailboxes, err := c.listMailboxesLocked()
 	if err != nil {
 		if isNetworkError(err) {
 			if reconErr := c.reconnect(ctx); reconErr != nil {
 				return fmt.Errorf("reconnect after LIST error: %w", reconErr)
 			}
-			mailboxes, err = c.listMailboxesLocked()
+			allMailboxes, err = c.listMailboxesLocked()
 		}
 		if err != nil {
 			return err
 		}
+	}
+
+	mailboxes := mailboxesForListing(allMailboxes)
+	if len(mailboxes) != len(allMailboxes) {
+		c.logger.Info("detected Gmail IMAP, listing only All Mail",
+			"total_mailboxes", len(allMailboxes))
 	}
 
 	var messages []gmailapi.MessageID
@@ -203,49 +287,11 @@ func (c *Client) buildMessageListCache(ctx context.Context) error {
 			return ctx.Err()
 		}
 
-		if err := c.selectMailbox(mailbox); err != nil {
-			if isNetworkError(err) {
-				c.logger.Warn("network error selecting mailbox, reconnecting", "mailbox", mailbox, "error", err)
-				if reconErr := c.reconnect(ctx); reconErr != nil {
-					return fmt.Errorf("reconnect failed listing mailbox %q: %w", mailbox, reconErr)
-				}
-				if err := c.selectMailbox(mailbox); err != nil {
-					c.logger.Warn("skipping mailbox after reconnect", "mailbox", mailbox, "error", err)
-					continue
-				}
-			} else {
-				c.logger.Warn("skipping mailbox", "mailbox", mailbox, "error", err)
-				continue
-			}
-		}
-
-		searchData, err := c.conn.UIDSearch(&imap.SearchCriteria{}, &imap.SearchOptions{ReturnAll: true}).Wait()
+		uids, err := c.enumerateMailbox(ctx, mailbox)
 		if err != nil {
-			if isNetworkError(err) {
-				c.logger.Warn("network error during UID SEARCH, reconnecting", "mailbox", mailbox, "error", err)
-				if reconErr := c.reconnect(ctx); reconErr != nil {
-					return fmt.Errorf("reconnect failed searching mailbox %q: %w", mailbox, reconErr)
-				}
-				if selErr := c.selectMailbox(mailbox); selErr != nil {
-					c.logger.Warn("skipping mailbox after reconnect", "mailbox", mailbox, "error", selErr)
-					continue
-				}
-				searchData, err = c.conn.UIDSearch(&imap.SearchCriteria{}, &imap.SearchOptions{ReturnAll: true}).Wait()
-				if err != nil {
-					c.logger.Warn("UID SEARCH failed after reconnect", "mailbox", mailbox, "error", err)
-					continue
-				}
-			} else {
-				c.logger.Warn("UID SEARCH failed, skipping mailbox", "mailbox", mailbox, "error", err)
-				continue
-			}
-		}
-
-		uidSet, ok := searchData.All.(imap.UIDSet)
-		if !ok {
+			c.logger.Warn("skipping mailbox", "mailbox", mailbox, "error", err)
 			continue
 		}
-		uids, _ := uidSet.Nums()
 		for _, uid := range uids {
 			messages = append(messages, gmailapi.MessageID{
 				ID:       compositeID(mailbox, uid),
@@ -615,16 +661,22 @@ func (c *Client) DeleteMessage(ctx context.Context, messageID string) error {
 }
 
 // BatchDeleteMessages permanently deletes multiple messages.
+// Returns an error if any deletion fails so the caller can fall
+// back to per-message deletes.
 func (c *Client) BatchDeleteMessages(ctx context.Context, messageIDs []string) error {
+	var firstErr error
 	for _, id := range messageIDs {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		if err := c.DeleteMessage(ctx, id); err != nil {
 			c.logger.Warn("failed to delete message", "id", id, "error", err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("delete %s: %w", id, err)
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // Close logs out and disconnects from the IMAP server.
