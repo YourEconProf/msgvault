@@ -19,6 +19,10 @@ import (
 // method. This avoids ambiguity when multiple sources share the same
 // identifier (e.g. a Gmail and IMAP source for the same email address).
 func (s *Syncer) Incremental(ctx context.Context, source *store.Source) (summary *gmail.SyncSummary, err error) {
+	if source == nil {
+		return nil, fmt.Errorf("no source provided - run full sync first")
+	}
+
 	startTime := time.Now()
 	summary = &gmail.SyncSummary{StartTime: startTime}
 

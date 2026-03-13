@@ -491,6 +491,16 @@ func TestSyncCmd_BrokenOAuthDoesNotBlockIMAP(t *testing.T) {
 					errMsg,
 				)
 			}
+
+			// The actual OAuth parse error must appear in
+			// the returned error, not just a count.
+			if !strings.Contains(errMsg, "parse client secrets") {
+				t.Errorf(
+					"returned error should contain OAuth "+
+						"parse error; got: %s",
+					errMsg,
+				)
+			}
 		})
 	}
 }

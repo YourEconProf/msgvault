@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -187,7 +188,8 @@ Examples:
 			for _, e := range syncErrors {
 				fmt.Printf("  %s\n", e)
 			}
-			return fmt.Errorf("%d account(s) failed to sync", len(syncErrors))
+			return fmt.Errorf("%d account(s) failed to sync: %s",
+				len(syncErrors), strings.Join(syncErrors, "; "))
 		}
 
 		return nil

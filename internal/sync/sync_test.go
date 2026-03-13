@@ -366,6 +366,15 @@ func TestSyncerWithProgress(t *testing.T) {
 
 // Tests for incremental sync
 
+func TestIncrementalSyncNilSource(t *testing.T) {
+	env := newTestEnv(t)
+
+	_, err := env.Syncer.Incremental(env.Context, nil)
+	if err == nil {
+		t.Error("expected error for nil source")
+	}
+}
+
 func TestIncrementalSyncNoHistoryID(t *testing.T) {
 	env := newTestEnv(t)
 
