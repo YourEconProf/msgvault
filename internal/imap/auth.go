@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/wesm/msgvault/internal/fileutil"
 )
 
 type credentialsFile struct {
@@ -20,8 +22,10 @@ func CredentialsPath(tokensDir, identifier string) string {
 }
 
 // SaveCredentials saves an IMAP password for the given identifier.
+// Uses atomic temp-file + rename to avoid partial writes, and
+// fileutil.Secure* helpers for Windows DACL hardening.
 func SaveCredentials(tokensDir, identifier, password string) error {
-	if err := os.MkdirAll(tokensDir, 0700); err != nil {
+	if err := fileutil.SecureMkdirAll(tokensDir, 0700); err != nil {
 		return fmt.Errorf("create tokens dir: %w", err)
 	}
 	creds := credentialsFile{Password: password}
@@ -30,8 +34,30 @@ func SaveCredentials(tokensDir, identifier, password string) error {
 		return err
 	}
 	path := CredentialsPath(tokensDir, identifier)
-	if err := os.WriteFile(path, data, 0600); err != nil {
-		return fmt.Errorf("write credentials: %w", err)
+
+	// Atomic write via temp file + rename (matches OAuth token storage).
+	tmpFile, err := os.CreateTemp(tokensDir, ".imap-cred-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp credentials file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write temp credentials file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close temp credentials file: %w", err)
+	}
+	if err := fileutil.SecureChmod(tmpPath, 0600); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp credentials file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename temp credentials file: %w", err)
 	}
 	return nil
 }

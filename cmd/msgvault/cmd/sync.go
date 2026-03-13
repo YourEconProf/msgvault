@@ -241,7 +241,7 @@ func runIncrementalSync(ctx context.Context, s *store.Store, oauthMgr *oauth.Man
 	fmt.Printf("Starting incremental sync for %s\n", email)
 	fmt.Printf("Last history ID: %s\n\n", source.SyncCursor.String)
 
-	summary, err := syncer.Incremental(ctx, email)
+	summary, err := syncer.Incremental(ctx, source)
 	if err != nil {
 		if ctx.Err() != nil {
 			fmt.Println("\nSync interrupted. Run again to resume.")

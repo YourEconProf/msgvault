@@ -57,7 +57,7 @@ func (p *panicOnHistoryAPI) ListHistory(_ context.Context, _ uint64, _ string) (
 
 func TestIncrementalSync_PanicReturnsError(t *testing.T) {
 	env := newTestEnv(t)
-	env.CreateSourceWithHistory(t, "12340")
+	source := env.CreateSourceWithHistory(t, "12340")
 
 	env.Mock.Profile.MessagesTotal = 10
 	env.Mock.Profile.HistoryID = 12350
@@ -66,7 +66,7 @@ func TestIncrementalSync_PanicReturnsError(t *testing.T) {
 	env.Syncer = New(&panicOnHistoryAPI{MockAPI: env.Mock}, env.Store, nil)
 
 	// Should return an error, NOT panic and crash the program
-	_, err := env.Syncer.Incremental(env.Context, testEmail)
+	_, err := env.Syncer.Incremental(env.Context, source)
 	if err == nil {
 		t.Fatal("expected error from panic recovery, got nil")
 	}
@@ -366,21 +366,12 @@ func TestSyncerWithProgress(t *testing.T) {
 
 // Tests for incremental sync
 
-func TestIncrementalSyncNoSource(t *testing.T) {
-	env := newTestEnv(t)
-
-	_, err := env.Syncer.Incremental(env.Context, testEmail)
-	if err == nil {
-		t.Error("expected error for incremental sync without source")
-	}
-}
-
 func TestIncrementalSyncNoHistoryID(t *testing.T) {
 	env := newTestEnv(t)
 
-	env.CreateSource(t)
+	source := env.CreateSource(t)
 
-	_, err := env.Syncer.Incremental(env.Context, testEmail)
+	_, err := env.Syncer.Incremental(env.Context, source)
 	if err == nil {
 		t.Error("expected error for incremental sync without history ID")
 	}
@@ -434,13 +425,13 @@ func TestIncrementalSyncWithDeletions(t *testing.T) {
 
 func TestIncrementalSyncHistoryExpired(t *testing.T) {
 	env := newTestEnv(t)
-	env.CreateSourceWithHistory(t, "1000")
+	source := env.CreateSourceWithHistory(t, "1000")
 
 	env.Mock.Profile.MessagesTotal = 10
 	env.Mock.Profile.HistoryID = 12350
 	env.Mock.HistoryError = &gmail.NotFoundError{Path: "/history"}
 
-	_, err := env.Syncer.Incremental(env.Context, testEmail)
+	_, err := env.Syncer.Incremental(env.Context, source)
 	if err == nil {
 		t.Error("expected error for expired history")
 	}
@@ -448,10 +439,10 @@ func TestIncrementalSyncHistoryExpired(t *testing.T) {
 
 func TestIncrementalSyncProfileError(t *testing.T) {
 	env := newTestEnv(t)
-	env.CreateSourceWithHistory(t, "12345")
+	source := env.CreateSourceWithHistory(t, "12345")
 	env.Mock.ProfileError = fmt.Errorf("auth failed")
 
-	_, err := env.Syncer.Incremental(env.Context, testEmail)
+	_, err := env.Syncer.Incremental(env.Context, source)
 	if err == nil {
 		t.Error("expected error when profile fails")
 	}
@@ -534,7 +525,7 @@ func TestIncrementalSyncLabelAddedToNewMessage(t *testing.T) {
 
 	env.SetHistory(12350, historyLabelAdded("new-msg", "STARRED"))
 
-	_, err := env.Syncer.Incremental(env.Context, testEmail)
+	_, err := env.Syncer.Incremental(env.Context, source)
 	if err != nil {
 		t.Fatalf("incremental sync: %v", err)
 	}
@@ -905,13 +896,13 @@ func TestFullSyncMessageFetchError(t *testing.T) {
 
 func TestIncrementalSyncLabelsError(t *testing.T) {
 	env := newTestEnv(t)
-	env.CreateSourceWithHistory(t, "12340")
+	source := env.CreateSourceWithHistory(t, "12340")
 
 	env.Mock.Profile.MessagesTotal = 1
 	env.Mock.Profile.HistoryID = 12350
 	env.Mock.LabelsError = fmt.Errorf("labels API error")
 
-	_, err := env.Syncer.Incremental(env.Context, testEmail)
+	_, err := env.Syncer.Incremental(env.Context, source)
 	if err == nil {
 		t.Error("expected error when labels sync fails")
 	}
