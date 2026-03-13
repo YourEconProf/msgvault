@@ -193,6 +193,13 @@ func (s *Syncer) processBatch(ctx context.Context, sourceID int64, listResp *gma
 				checkpoint.ErrorsCount++
 				continue
 			}
+			// Non-nil stub with nil Raw signals a cross-mailbox
+			// dedup skip (e.g. same message in All Mail and Trash).
+			// Distinct from []byte{} which is a genuine empty body.
+			if raw.Raw == nil {
+				result.skipped++
+				continue
+			}
 
 			// Track oldest message date for progress display
 			// Gmail returns messages newest-to-oldest, so oldest shows where we've reached

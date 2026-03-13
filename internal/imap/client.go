@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -655,7 +656,27 @@ func (c *Client) GetMessagesRawBatch(ctx context.Context, messageIDs []string) (
 		return nil, err
 	}
 
-	for mailbox, items := range byMailbox {
+	// Process allMailFolder first so seenRFC822IDs is populated from
+	// the canonical source before checking Trash/Junk for duplicates.
+	mailboxOrder := make([]string, 0, len(byMailbox))
+	for mb := range byMailbox {
+		mailboxOrder = append(mailboxOrder, mb)
+	}
+	sort.Strings(mailboxOrder)
+	if c.allMailFolder != "" {
+		for i, mb := range mailboxOrder {
+			if mb == c.allMailFolder {
+				mailboxOrder = append(
+					append([]string{mb}, mailboxOrder[:i]...),
+					mailboxOrder[i+1:]...,
+				)
+				break
+			}
+		}
+	}
+
+	for _, mailbox := range mailboxOrder {
+		items := byMailbox[mailbox]
 		if ctx.Err() != nil {
 			return results, ctx.Err()
 		}
@@ -738,16 +759,19 @@ func (c *Client) GetMessagesRawBatch(ctx context.Context, messageIDs []string) (
 				// Dedup by RFC822 Message-ID when listing
 				// All Mail alongside Trash/Spam. On Gmail these
 				// are disjoint, but non-Gmail servers may overlap.
+				// Return a non-nil stub with empty Raw so the
+				// caller treats this as a skip, not a fetch error.
+				msgID := compositeID(mailbox, msgBuf.UID)
 				if c.seenRFC822IDs != nil &&
 					msgBuf.Envelope != nil &&
 					msgBuf.Envelope.MessageID != "" {
 					if c.seenRFC822IDs[msgBuf.Envelope.MessageID] {
+						results[idx] = &gmailapi.RawMessage{ID: msgID}
 						continue
 					}
 					c.seenRFC822IDs[msgBuf.Envelope.MessageID] = true
 				}
 
-				msgID := compositeID(mailbox, msgBuf.UID)
 				labels := []string{mailbox}
 
 				// Merge labels from other mailboxes via the
