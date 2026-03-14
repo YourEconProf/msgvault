@@ -577,21 +577,17 @@ func ImportEmlxDir(
 
 // resolveCheckpointFile finds the full path in files whose basename
 // matches the legacy bare filename from an older checkpoint. Returns
-// the last matching full path (since files are sorted, this is the
-// one the checkpoint would have referred to). Returns an error if no
-// match is found, since comparing a bare filename against absolute
-// paths would produce incorrect resume behavior.
+// the first matching full path so that no previously-unseen partition
+// files are skipped. Returns an error if no match is found, since
+// comparing a bare filename against absolute paths would produce
+// incorrect resume behavior.
 func resolveCheckpointFile(
 	basename string, files []string,
 ) (string, error) {
-	var match string
 	for _, f := range files {
 		if filepath.Base(f) == basename {
-			match = f
+			return f, nil
 		}
-	}
-	if match != "" {
-		return match, nil
 	}
 	return "", fmt.Errorf(
 		"legacy checkpoint file %q not found in current mailbox; rerun with --no-resume to start fresh",
