@@ -317,10 +317,14 @@ func runScheduledSync(ctx context.Context, email string, s *store.Store, oauthMg
 		"duration", time.Since(startTime),
 	)
 
-	// Build cache after sync if there were new messages
-	if summary.MessagesAdded > 0 {
-		logger.Info("building cache after sync", "email", email)
-		result, err := buildCache(cfg.DatabaseDSN(), cfg.AnalyticsDir(), false)
+	// Rebuild cache if stale (covers new messages, deletions, and
+	// label updates — not just additions).
+	dbPath := cfg.DatabaseDSN()
+	analyticsDir := cfg.AnalyticsDir()
+	if needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir); needsBuild {
+		logger.Info("rebuilding cache after sync",
+			"email", email, "reason", reason)
+		result, err := buildCache(dbPath, analyticsDir, false)
 		if err != nil {
 			logger.Error("cache build failed", "error", err)
 			// Don't fail the sync for cache build errors
