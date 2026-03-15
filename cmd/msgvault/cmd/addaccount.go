@@ -105,13 +105,21 @@ Examples:
 
 		if err := oauthMgr.Authorize(cmd.Context(), email); err != nil {
 			var mismatch *oauth.TokenMismatchError
-			if errors.As(err, &mismatch) && !forceReauth {
-				return fmt.Errorf(
-					"%w\nIf %s is the primary address, "+
-						"re-add with:\n"+
-						"  msgvault add-account %s",
-					err, mismatch.Actual, mismatch.Actual,
-				)
+			if errors.As(err, &mismatch) {
+				// Only suggest add-account with the primary
+				// address when no source exists yet. If a source
+				// already exists (--force re-auth, or token was
+				// manually deleted), the suggestion would create
+				// a duplicate and orphan the existing source.
+				existing, _ := s.GetSourcesByIdentifier(email)
+				if len(existing) == 0 {
+					return fmt.Errorf(
+						"%w\nIf %s is the primary address, "+
+							"re-add with:\n"+
+							"  msgvault add-account %s",
+						err, mismatch.Actual, mismatch.Actual,
+					)
+				}
 			}
 			return fmt.Errorf("authorization failed: %w", err)
 		}
