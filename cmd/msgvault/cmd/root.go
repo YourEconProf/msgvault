@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/config"
+	"github.com/wesm/msgvault/internal/oauth"
 	"golang.org/x/oauth2"
 )
 
@@ -210,6 +211,18 @@ func getTokenSourceWithReauth(
 	// AuthorizeManual validates the token and atomically saves it,
 	// so the old token is only overwritten after validation succeeds.
 	if authErr := mgr.AuthorizeManual(ctx, email); authErr != nil {
+		var mismatch *oauth.TokenMismatchError
+		if errors.As(authErr, &mismatch) {
+			return nil, fmt.Errorf(
+				"re-authorize %s: %w\n"+
+					"If this account uses an alias, remove "+
+					"and re-add with the primary address:\n"+
+					"  msgvault remove-account %s\n"+
+					"  msgvault add-account %s",
+				email, authErr,
+				mismatch.Expected, mismatch.Actual,
+			)
+		}
 		return nil, fmt.Errorf("re-authorize %s: %w", email, authErr)
 	}
 

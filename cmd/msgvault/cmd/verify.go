@@ -87,13 +87,16 @@ Examples:
 
 		fmt.Printf("Verifying archive for %s...\n\n", profile.EmailAddress)
 
-		// Get source from database
-		source, err := s.GetSourceByIdentifier(profile.EmailAddress)
+		// Look up the source by the user-supplied identifier, not the
+		// canonical profile address — the source is keyed under the
+		// identifier used during add-account (e.g. first.last@gmail.com
+		// even if Gmail's canonical form is firstlast@gmail.com).
+		source, err := s.GetSourceByIdentifier(email)
 		if err != nil {
 			return fmt.Errorf("get source: %w", err)
 		}
 		if source == nil {
-			fmt.Printf("Account %s not found in database.\n", profile.EmailAddress)
+			fmt.Printf("Account %s not found in database.\n", email)
 			fmt.Println("Run 'sync-full' first to populate the archive.")
 			return nil
 		}
