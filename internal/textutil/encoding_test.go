@@ -486,9 +486,10 @@ func TestFirstLine(t *testing.T) {
 		{"leading carriage return", "\r\nSecond", "Second"},
 		{"mixed leading newlines", "\r\n\n\rThird", "Third"},
 		{"only newlines", "\n\n\n", ""},
-		{"long line truncated", strings.Repeat("x", 250), strings.Repeat("x", 200) + "..."},
-		{"exactly 200 chars", strings.Repeat("y", 200), strings.Repeat("y", 200)},
-		{"long first line of multi", strings.Repeat("z", 250) + "\nSecond", strings.Repeat("z", 200) + "..."},
+		{"long line truncated", strings.Repeat("x", 250), strings.Repeat("x", 197) + "..."},
+		{"exactly 200 runes", strings.Repeat("y", 200), strings.Repeat("y", 200)},
+		{"long first line of multi", strings.Repeat("z", 250) + "\nSecond", strings.Repeat("z", 197) + "..."},
+		{"unicode truncation safe", strings.Repeat("é", 250), strings.Repeat("é", 197) + "..."},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

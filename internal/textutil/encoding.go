@@ -136,7 +136,7 @@ func TruncateRunes(s string, maxRunes int) string {
 	return string(runes[:maxRunes-3]) + "..."
 }
 
-// FirstLine returns the first line of a string, capped at 200 characters.
+// FirstLine returns the first line of a string, capped at 200 runes.
 // Useful for extracting clean error messages from multi-line outputs
 // where the first line itself may be excessively long (e.g. enmime
 // includes malformed MIME content in its error messages).
@@ -145,8 +145,5 @@ func FirstLine(s string) string {
 	if idx := strings.Index(s, "\n"); idx >= 0 {
 		s = s[:idx]
 	}
-	if len(s) > 200 {
-		return s[:200] + "..."
-	}
-	return s
+	return TruncateRunes(s, 200)
 }
