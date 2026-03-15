@@ -1730,12 +1730,12 @@ func TestCacheNeedsBuild(t *testing.T) {
 
 			tt.setup(t, dbPath, analyticsDir)
 
-			gotBuild, gotReason := cacheNeedsBuild(dbPath, analyticsDir)
-			if gotBuild != tt.wantBuild {
-				t.Errorf("cacheNeedsBuild() build = %v, want %v (reason: %q)", gotBuild, tt.wantBuild, gotReason)
+			got := cacheNeedsBuild(dbPath, analyticsDir)
+			if got.NeedsBuild != tt.wantBuild {
+				t.Errorf("cacheNeedsBuild() build = %v, want %v (reason: %q)", got.NeedsBuild, tt.wantBuild, got.Reason)
 			}
-			if tt.wantReason != "" && gotReason != tt.wantReason {
-				t.Errorf("cacheNeedsBuild() reason = %q, want %q", gotReason, tt.wantReason)
+			if tt.wantReason != "" && got.Reason != tt.wantReason {
+				t.Errorf("cacheNeedsBuild() reason = %q, want %q", got.Reason, tt.wantReason)
 			}
 		})
 	}

@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -89,8 +88,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// otherwise fall back to SQLite so remote endpoints still work.
 	analyticsDir := cfg.AnalyticsDir()
 	var engine query.Engine
-	needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir)
-	if !needsBuild && query.HasCompleteParquetData(analyticsDir) {
+	staleness := cacheNeedsBuild(dbPath, analyticsDir)
+	if !staleness.NeedsBuild && query.HasCompleteParquetData(analyticsDir) {
 		duckEngine, engineErr := query.NewDuckDBEngine(
 			analyticsDir, dbPath, s.DB(),
 		)
@@ -102,9 +101,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 			engine = duckEngine
 		}
 	} else {
-		if reason != "" {
+		if staleness.Reason != "" {
 			logger.Info("parquet cache not usable, using SQLite engine",
-				"reason", reason)
+				"reason", staleness.Reason)
 		} else {
 			logger.Info("parquet cache not built - using SQLite engine (run 'msgvault build-cache' for faster aggregates)")
 		}
@@ -318,19 +317,15 @@ func runScheduledSync(ctx context.Context, email string, s *store.Store, oauthMg
 		"duration", time.Since(startTime),
 	)
 
-	// Rebuild cache if stale (covers new messages, deletions, and
-	// label updates — not just additions).
+	// Rebuild cache if stale (covers new messages and deletions).
 	dbPath := cfg.DatabaseDSN()
 	analyticsDir := cfg.AnalyticsDir()
-	if needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir); needsBuild {
-		// Deletions require a full rebuild because incremental builds
-		// only export rows with id > lastMessageID and cannot update
-		// or remove existing rows in parquet shards.
-		fullRebuild := strings.Contains(reason, "deletions")
+	if staleness := cacheNeedsBuild(dbPath, analyticsDir); staleness.NeedsBuild {
 		logger.Info("rebuilding cache after sync",
-			"email", email, "reason", reason,
-			"full_rebuild", fullRebuild)
-		result, err := buildCache(dbPath, analyticsDir, fullRebuild)
+			"email", email, "reason", staleness.Reason,
+			"full_rebuild", staleness.FullRebuild)
+		result, err := buildCache(
+			dbPath, analyticsDir, staleness.FullRebuild)
 		if err != nil {
 			logger.Error("cache build failed", "error", err)
 			// Don't fail the sync for cache build errors

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -102,10 +103,10 @@ Remote Mode:
 
 			// Check if cache needs to be built/updated (unless forcing SQL or skipping)
 			if !forceSQL && !skipCacheBuild {
-				needsBuild, reason := cacheNeedsBuild(dbPath, analyticsDir)
-				if needsBuild {
-					fmt.Printf("Building analytics cache (%s)...\n", reason)
-					result, err := buildCache(dbPath, analyticsDir, true)
+				staleness := cacheNeedsBuild(dbPath, analyticsDir)
+				if staleness.NeedsBuild {
+					fmt.Printf("Building analytics cache (%s)...\n", staleness.Reason)
+					result, err := buildCache(dbPath, analyticsDir, staleness.FullRebuild)
 					if err != nil {
 						fmt.Fprintf(os.Stderr, "Warning: Failed to build cache: %v\n", err)
 						fmt.Fprintf(os.Stderr, "Falling back to SQLite (may be slow for large archives)\n")
@@ -157,9 +158,19 @@ Remote Mode:
 	},
 }
 
-// cacheNeedsBuild checks if the analytics cache needs to be built or updated.
-// Returns (needsBuild, reason) where reason describes why.
-func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
+// cacheStaleness describes why the analytics cache needs a rebuild.
+type cacheStaleness struct {
+	NeedsBuild  bool
+	HasNew      bool // new messages since last build
+	HasDeleted  bool // deletions since last build
+	FullRebuild bool // must rewrite all shards (not incremental)
+	Reason      string
+}
+
+// cacheNeedsBuild checks if the analytics cache needs to be built or
+// updated. Collects all staleness signals before returning so that
+// e.g. a mixed add+delete sync correctly reports both.
+func cacheNeedsBuild(dbPath, analyticsDir string) cacheStaleness {
 	messagesDir := filepath.Join(analyticsDir, "messages")
 	stateFile := filepath.Join(analyticsDir, "_last_sync.json")
 
@@ -169,22 +180,31 @@ func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
 	data, err := os.ReadFile(stateFile)
 	if err != nil {
 		if !hasParquetData {
-			return true, "no cache exists"
+			return cacheStaleness{
+				NeedsBuild: true, FullRebuild: true,
+				Reason: "no cache exists",
+			}
 		}
-		return true, "no sync state found"
+		return cacheStaleness{
+			NeedsBuild: true, FullRebuild: true,
+			Reason: "no sync state found",
+		}
 	}
 
 	var state syncState
 	if err := json.Unmarshal(data, &state); err != nil {
-		return true, "invalid sync state"
+		return cacheStaleness{
+			NeedsBuild: true, FullRebuild: true,
+			Reason: "invalid sync state",
+		}
 	}
 
-	// Check if SQLite has newer messages
-	// We need to query SQLite directly to check max message ID
 	db, err := store.Open(dbPath)
 	if err != nil {
-		// Can't open DB to check - force rebuild to be safe
-		return true, "cannot verify cache status"
+		return cacheStaleness{
+			NeedsBuild: true, FullRebuild: true,
+			Reason: "cannot verify cache status",
+		}
 	}
 	defer db.Close()
 
@@ -194,59 +214,74 @@ func cacheNeedsBuild(dbPath, analyticsDir string) (bool, string) {
 		WHERE deleted_from_source_at IS NULL AND sent_at IS NOT NULL
 	`).Scan(&maxID)
 	if err != nil {
-		// Can't query - force rebuild to be safe
-		return true, "cannot verify cache status"
+		return cacheStaleness{
+			NeedsBuild: true, FullRebuild: true,
+			Reason: "cannot verify cache status",
+		}
 	}
 
-	// Zero-message accounts never produce message parquet files, so
-	// HasParquetData returns false even after a successful cache build.
-	// If sync state and DB both agree there are 0 messages, no build needed.
 	if maxID == 0 && state.LastMessageID == 0 {
-		return false, ""
+		return cacheStaleness{}
 	}
 
 	if !hasParquetData {
-		return true, "no cache exists"
+		return cacheStaleness{
+			NeedsBuild: true, FullRebuild: true,
+			Reason: "no cache exists",
+		}
 	}
+
+	// Collect staleness signals without short-circuiting so a mixed
+	// add+delete sync correctly triggers a full rebuild.
+	var reasons []string
+	result := cacheStaleness{}
 
 	if maxID > state.LastMessageID {
 		newCount := maxID - state.LastMessageID
-		return true, fmt.Sprintf("%d new messages", newCount)
+		result.HasNew = true
+		reasons = append(reasons,
+			fmt.Sprintf("%d new messages", newCount))
 	}
 
-	// Check if any messages were soft-deleted after the last cache build.
-	// Incremental builds don't rewrite existing rows, so deletions that
-	// occur after the build leave stale (non-deleted) rows in Parquet.
-	// Format as "YYYY-MM-DD HH:MM:SS" to match datetime('now') values.
-	var deletedSinceBuild int64
 	syncAtStr := state.LastSyncAt.UTC().Format("2006-01-02 15:04:05")
+	var deletedSinceBuild int64
 	err = db.DB().QueryRow(`
 		SELECT COUNT(*) FROM messages
 		WHERE deleted_from_source_at IS NOT NULL
 		  AND deleted_from_source_at >= ?
 	`, syncAtStr).Scan(&deletedSinceBuild)
 	if err != nil {
-		return true, "cannot verify deletion state"
+		return cacheStaleness{
+			NeedsBuild: true, FullRebuild: true,
+			Reason: "cannot verify deletion state",
+		}
 	}
 	if deletedSinceBuild > 0 {
-		return true, fmt.Sprintf(
-			"%d deletions since last cache build",
-			deletedSinceBuild,
-		)
+		result.HasDeleted = true
+		result.FullRebuild = true
+		reasons = append(reasons,
+			fmt.Sprintf("%d deletions", deletedSinceBuild))
 	}
 
 	// Check if parquet files actually exist (directory might be empty)
-	files, _ := filepath.Glob(filepath.Join(messagesDir, "*", "*.parquet"))
+	files, _ := filepath.Glob(
+		filepath.Join(messagesDir, "*", "*.parquet"))
 	if len(files) == 0 {
-		return true, "cache directory empty"
+		result.FullRebuild = true
+		reasons = append(reasons, "cache directory empty")
 	}
 
-	// Check for required parquet tables (e.g. conversations added in a newer version)
 	if missingRequiredParquet(analyticsDir) {
-		return true, "cache missing required tables"
+		result.FullRebuild = true
+		reasons = append(reasons, "cache missing required tables")
 	}
 
-	return false, ""
+	if len(reasons) > 0 {
+		result.NeedsBuild = true
+		result.Reason = strings.Join(reasons, "; ")
+	}
+
+	return result
 }
 
 func init() {
