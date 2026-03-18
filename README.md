@@ -15,18 +15,19 @@ Archive a lifetime of email. Analytics and search in milliseconds, entirely offl
 
 Your messages are yours. Decades of correspondence, attachments, and history shouldn't be locked behind a web interface or an API. msgvault downloads a complete local copy and then everything runs offline. Search, analytics, and the MCP server all work against local data with no network access required.
 
-Currently supports Gmail sync, plus offline imports from MBOX exports and Apple Mail (.emlx) directories.
+Currently supports Gmail and IMAP sync, plus offline imports from MBOX exports and Apple Mail (.emlx) directories.
 
 ## Features
 
 - **Full Gmail backup**: raw MIME, attachments, labels, and metadata
+- **IMAP sync**: archive mail from any standard IMAP server
 - **MBOX / Apple Mail import**: import email from MBOX exports or Apple Mail (.emlx) directories
-- **Interactive TUI**: drill-down analytics over your entire message history, powered by DuckDB over Parquet
+- **Interactive TUI**: drill-down analytics over your entire message history, powered by DuckDB over Parquet — connects to a remote `msgvault serve` instance or runs locally
 - **Full-text search**: FTS5 with Gmail-like query syntax (`from:`, `has:attachment`, date ranges)
 - **MCP server**: access your full archive at the speed of thought in Claude Desktop and other MCP-capable AI agents
 - **DuckDB analytics**: millisecond aggregate queries across hundreds of thousands of messages in the TUI, CLI, and MCP server
 - **Incremental sync**: History API picks up only new and changed messages
-- **Multi-account**: archive several Gmail accounts in a single database
+- **Multi-account**: archive several Gmail and IMAP accounts in a single database
 - **Resumable**: interrupted syncs resume from the last checkpoint
 - **Content-addressed attachments**: deduplicated by SHA-256
 
@@ -78,11 +79,11 @@ msgvault tui
 | Command | Description |
 |---------|-------------|
 | `init-db` | Create the database |
-| `add-account EMAIL` | Authorize a Gmail account (use `--headless` for servers) |
+| `add-account EMAIL` | Authorize a Gmail account (use `--headless` for servers) or add an IMAP account |
 | `sync-full EMAIL` | Full sync (`--limit N`, `--after`/`--before` for date ranges) |
 | `sync EMAIL` | Sync only new/changed messages |
 | `tui` | Launch the interactive TUI (`--account` to filter, `--local` to force local) |
-| `search QUERY` | Search messages (`--json` for machine output) |
+| `search QUERY` | Search messages (`--account` to filter, `--json` for machine output) |
 | `show-message ID` | View full message details (`--json` for machine output) |
 | `mcp` | Start the MCP server for AI assistant integration |
 | `serve` | Run daemon with scheduled sync and HTTP API for remote TUI |
@@ -108,7 +109,8 @@ Import email from providers that offer MBOX exports or from a local Apple Mail d
 msgvault init-db
 msgvault import-mbox you@example.com /path/to/export.mbox
 msgvault import-mbox you@example.com /path/to/export.zip   # zip of MBOX files
-msgvault import-emlx you@example.com ~/Library/Mail/V10     # Apple Mail
+msgvault import-emlx                                        # auto-discover Apple Mail accounts
+msgvault import-emlx you@example.com ~/Library/Mail/V10     # explicit path
 ```
 
 ## Configuration
