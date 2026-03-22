@@ -64,23 +64,7 @@ Examples:
 			return fmt.Errorf("init schema: %w", err)
 		}
 
-		// oauthMgr is created lazily on first use so that IMAP-only users are
-		// not blocked by an absent client_secrets file.
-		var oauthMgr *oauth.Manager
-		getOAuthMgr := func() (*oauth.Manager, error) {
-			if oauthMgr != nil {
-				return oauthMgr, nil
-			}
-			if cfg.OAuth.ClientSecrets == "" {
-				return nil, errOAuthNotConfigured()
-			}
-			mgr, err := oauth.NewManager(cfg.OAuth.ClientSecrets, cfg.TokensDir(), logger)
-			if err != nil {
-				return nil, wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
-			}
-			oauthMgr = mgr
-			return oauthMgr, nil
-		}
+		getOAuthMgr := oauthManagerCache()
 
 		// Determine which sources to sync
 		var sources []*store.Source
@@ -119,11 +103,11 @@ Examples:
 			for _, src := range allSources {
 				switch src.SourceType {
 				case "gmail":
-					if cfg.OAuth.ClientSecrets == "" {
+					if !cfg.OAuth.HasAnyConfig() {
 						fmt.Printf("Skipping %s (OAuth not configured)\n", src.Identifier)
 						continue
 					}
-					mgr, err := getOAuthMgr()
+					mgr, err := getOAuthMgr(sourceOAuthApp(src))
 					if err != nil {
 						syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", src.Identifier, err))
 						continue
@@ -170,13 +154,13 @@ Examples:
 
 			// Ensure the OAuth manager is initialized before syncing Gmail sources.
 			if src.SourceType == "gmail" || src.SourceType == "" {
-				if _, err := getOAuthMgr(); err != nil {
+				if _, err := getOAuthMgr(sourceOAuthApp(src)); err != nil {
 					syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", src.Identifier, err))
 					continue
 				}
 			}
 
-			if err := runFullSync(ctx, s, oauthMgr, src); err != nil {
+			if err := runFullSync(ctx, s, getOAuthMgr, src); err != nil {
 				syncErrors = append(syncErrors, fmt.Sprintf("%s: %v", src.Identifier, err))
 				continue
 			}
@@ -197,9 +181,13 @@ Examples:
 }
 
 // buildAPIClient creates the appropriate gmail.API client for the given source.
-func buildAPIClient(ctx context.Context, src *store.Source, oauthMgr *oauth.Manager) (gmail.API, error) {
+func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(string) (*oauth.Manager, error)) (gmail.API, error) {
 	switch src.SourceType {
 	case "gmail", "":
+		oauthMgr, err := getOAuthMgr(sourceOAuthApp(src))
+		if err != nil {
+			return nil, err
+		}
 		interactive := isatty.IsTerminal(os.Stdin.Fd()) ||
 			isatty.IsCygwinTerminal(os.Stdin.Fd())
 		tokenSource, err := getTokenSourceWithReauth(ctx, oauthMgr, src.Identifier, interactive)
@@ -231,8 +219,8 @@ func buildAPIClient(ctx context.Context, src *store.Source, oauthMgr *oauth.Mana
 	}
 }
 
-func runFullSync(ctx context.Context, s *store.Store, oauthMgr *oauth.Manager, src *store.Source) error {
-	apiClient, err := buildAPIClient(ctx, src, oauthMgr)
+func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (*oauth.Manager, error), src *store.Source) error {
+	apiClient, err := buildAPIClient(ctx, src, getOAuthMgr)
 	if err != nil {
 		return err
 	}

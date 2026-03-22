@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wesm/msgvault/internal/config"
 	"github.com/wesm/msgvault/internal/oauth"
+	"github.com/wesm/msgvault/internal/store"
 	"golang.org/x/oauth2"
 )
 
@@ -233,6 +234,36 @@ func getTokenSourceWithReauth(
 	}
 
 	return tokenSource, nil
+}
+
+// oauthManagerCache returns a resolver function that lazily creates and
+// caches oauth.Manager instances keyed by app name.
+func oauthManagerCache() func(appName string) (*oauth.Manager, error) {
+	managers := map[string]*oauth.Manager{}
+	return func(appName string) (*oauth.Manager, error) {
+		if mgr, ok := managers[appName]; ok {
+			return mgr, nil
+		}
+		secretsPath, err := cfg.OAuth.ClientSecretsFor(appName)
+		if err != nil {
+			return nil, err
+		}
+		mgr, err := oauth.NewManager(secretsPath, cfg.TokensDir(), logger)
+		if err != nil {
+			return nil, wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
+		}
+		managers[appName] = mgr
+		return mgr, nil
+	}
+}
+
+// sourceOAuthApp extracts the oauth app name from a Source, returning ""
+// for the default app.
+func sourceOAuthApp(src *store.Source) string {
+	if src != nil && src.OAuthApp.Valid {
+		return src.OAuthApp.String
+	}
+	return ""
 }
 
 func init() {
