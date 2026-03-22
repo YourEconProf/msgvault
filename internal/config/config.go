@@ -89,9 +89,51 @@ type DataConfig struct {
 	DatabaseURL string `toml:"database_url"`
 }
 
+// OAuthApp holds configuration for a named OAuth application.
+type OAuthApp struct {
+	ClientSecrets string `toml:"client_secrets"`
+}
+
 // OAuthConfig holds OAuth configuration.
 type OAuthConfig struct {
-	ClientSecrets string `toml:"client_secrets"`
+	ClientSecrets string              `toml:"client_secrets"`
+	Apps          map[string]OAuthApp `toml:"apps"`
+}
+
+// ClientSecretsFor returns the client secrets path for the given app name.
+// Empty name returns the default. Non-empty name looks up Apps[name].
+func (o *OAuthConfig) ClientSecretsFor(name string) (string, error) {
+	if name == "" {
+		if o.ClientSecrets == "" {
+			return "", fmt.Errorf("OAuth client secrets not configured.\n\n" +
+				"Set [oauth] client_secrets in config.toml, or use --oauth-app <name>")
+		}
+		return o.ClientSecrets, nil
+	}
+	app, ok := o.Apps[name]
+	if !ok {
+		return "", fmt.Errorf("OAuth app %q not configured. Add it to config.toml:\n\n"+
+			"  [oauth.apps.%s]\n"+
+			"  client_secrets = \"/path/to/client_secret.json\"", name, name)
+	}
+	if app.ClientSecrets == "" {
+		return "", fmt.Errorf("OAuth app %q has no client_secrets path configured", name)
+	}
+	return app.ClientSecrets, nil
+}
+
+// HasAnyConfig returns true if any OAuth configuration exists
+// (default or named apps).
+func (o *OAuthConfig) HasAnyConfig() bool {
+	if o.ClientSecrets != "" {
+		return true
+	}
+	for _, app := range o.Apps {
+		if app.ClientSecrets != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // SyncConfig holds sync-related configuration.

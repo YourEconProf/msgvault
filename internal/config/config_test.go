@@ -1134,6 +1134,126 @@ func TestSave_OverwritesExisting(t *testing.T) {
 	}
 }
 
+func TestOAuthConfig_ClientSecretsFor(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  OAuthConfig
+		appName string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "empty name returns default",
+			config:  OAuthConfig{ClientSecrets: "/path/to/default.json"},
+			appName: "",
+			want:    "/path/to/default.json",
+		},
+		{
+			name:    "empty name with no default returns error",
+			config:  OAuthConfig{},
+			appName: "",
+			wantErr: true,
+		},
+		{
+			name: "named app returns its path",
+			config: OAuthConfig{
+				ClientSecrets: "/path/to/default.json",
+				Apps: map[string]OAuthApp{
+					"acme": {ClientSecrets: "/path/to/acme.json"},
+				},
+			},
+			appName: "acme",
+			want:    "/path/to/acme.json",
+		},
+		{
+			name: "named app not found returns error",
+			config: OAuthConfig{
+				ClientSecrets: "/path/to/default.json",
+				Apps: map[string]OAuthApp{
+					"acme": {ClientSecrets: "/path/to/acme.json"},
+				},
+			},
+			appName: "missing",
+			wantErr: true,
+		},
+		{
+			name: "named app with empty path returns error",
+			config: OAuthConfig{
+				Apps: map[string]OAuthApp{
+					"acme": {ClientSecrets: ""},
+				},
+			},
+			appName: "acme",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.config.ClientSecretsFor(tt.appName)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("ClientSecretsFor(%q) error = nil, want error", tt.appName)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("ClientSecretsFor(%q) error = %v", tt.appName, err)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("ClientSecretsFor(%q) = %q, want %q", tt.appName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOAuthConfig_HasAnyConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		config OAuthConfig
+		want   bool
+	}{
+		{
+			name:   "empty config",
+			config: OAuthConfig{},
+			want:   false,
+		},
+		{
+			name:   "default only",
+			config: OAuthConfig{ClientSecrets: "/path/to/default.json"},
+			want:   true,
+		},
+		{
+			name: "named app only",
+			config: OAuthConfig{
+				Apps: map[string]OAuthApp{
+					"acme": {ClientSecrets: "/path/to/acme.json"},
+				},
+			},
+			want: true,
+		},
+		{
+			name: "named app with empty path",
+			config: OAuthConfig{
+				Apps: map[string]OAuthApp{
+					"acme": {ClientSecrets: ""},
+				},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.config.HasAnyConfig()
+			if got != tt.want {
+				t.Errorf("HasAnyConfig() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSave_AllowInsecureRoundTrip(t *testing.T) {
 	tmpDir := t.TempDir()
 
