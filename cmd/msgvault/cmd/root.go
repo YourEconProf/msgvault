@@ -83,13 +83,17 @@ func oauthSetupHint() string {
 	if cfg != nil {
 		configPath = cfg.ConfigFilePath()
 	}
-	return fmt.Sprintf(`
+	hint := fmt.Sprintf(`
 To use msgvault, you need a Google Cloud OAuth credential:
   1. Follow the setup guide: https://msgvault.io/guides/oauth-setup/
   2. Download the client_secret.json file
   3. Create or edit %s:
        [oauth]
        client_secrets = "/path/to/client_secret.json"`, configPath)
+	if cfg != nil && len(cfg.OAuth.Apps) > 0 {
+		hint += "\n\nNamed OAuth apps are configured. Use --oauth-app <name> to specify one."
+	}
+	return hint
 }
 
 // errOAuthNotConfigured returns a helpful error when OAuth client secrets are missing.

@@ -309,7 +309,7 @@ Examples:
 		}
 
 		// Validate config
-		if cfg.OAuth.ClientSecrets == "" {
+		if !cfg.OAuth.HasAnyConfig() {
 			return errOAuthNotConfigured()
 		}
 
@@ -358,6 +358,16 @@ Examples:
 			return fmt.Errorf("init schema: %w", err)
 		}
 
+		// Resolve OAuth credentials for this account
+		appName := ""
+		if src, _ := findGmailSource(s, account); src != nil {
+			appName = sourceOAuthApp(src)
+		}
+		clientSecretsPath, err := cfg.OAuth.ClientSecretsFor(appName)
+		if err != nil {
+			return err
+		}
+
 		// Set up context with cancellation
 		ctx, cancel := context.WithCancel(cmd.Context())
 		defer cancel()
@@ -381,7 +391,7 @@ Examples:
 		}
 
 		// Create OAuth manager with appropriate scopes
-		oauthMgr, err := oauth.NewManagerWithScopes(cfg.OAuth.ClientSecrets, cfg.TokensDir(), logger, requiredScopes)
+		oauthMgr, err := oauth.NewManagerWithScopes(clientSecretsPath, cfg.TokensDir(), logger, requiredScopes)
 		if err != nil {
 			return wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
 		}
@@ -396,14 +406,14 @@ Examples:
 			// reactive detection on the first API call.
 			if oauthMgr.HasScopeMetadata(account) {
 				// Token has scope metadata but lacks deletion scope — escalate now
-				if err := promptScopeEscalation(ctx, oauthMgr, account, needsBatchDelete); err != nil {
+				if err := promptScopeEscalation(ctx, oauthMgr, account, needsBatchDelete, clientSecretsPath); err != nil {
 					if errors.Is(err, errUserCanceled) {
 						return nil
 					}
 					return err
 				}
 				// Re-create OAuth manager with new token
-				oauthMgr, err = oauth.NewManagerWithScopes(cfg.OAuth.ClientSecrets, cfg.TokensDir(), logger, requiredScopes)
+				oauthMgr, err = oauth.NewManagerWithScopes(clientSecretsPath, cfg.TokensDir(), logger, requiredScopes)
 				if err != nil {
 					return wrapOAuthError(fmt.Errorf("create oauth manager: %w", err))
 				}
@@ -464,7 +474,7 @@ Examples:
 
 				// Check if this is a scope error - offer to re-authorize
 				if isInsufficientScopeError(execErr) {
-					if err := promptScopeEscalation(ctx, oauthMgr, account, !useTrash); err != nil {
+					if err := promptScopeEscalation(ctx, oauthMgr, account, !useTrash, clientSecretsPath); err != nil {
 						if errors.Is(err, errUserCanceled) {
 							return nil
 						}
@@ -619,7 +629,7 @@ var errUserCanceled = errors.New("user canceled scope escalation")
 // promptScopeEscalation prompts the user to re-authorize with elevated scopes.
 // It deletes the old token, runs the OAuth browser flow, and returns nil on
 // success. The caller should re-create the OAuth manager after this returns.
-func promptScopeEscalation(ctx context.Context, oauthMgr *oauth.Manager, account string, batchDelete bool) error {
+func promptScopeEscalation(ctx context.Context, oauthMgr *oauth.Manager, account string, batchDelete bool, clientSecretsPath string) error {
 	fmt.Println("\n" + strings.Repeat("=", 70))
 	fmt.Println("PERMISSION UPGRADE REQUIRED")
 	fmt.Println(strings.Repeat("=", 70))
@@ -669,7 +679,7 @@ func promptScopeEscalation(ctx context.Context, oauthMgr *oauth.Manager, account
 	fmt.Println("Starting OAuth flow...")
 	fmt.Println()
 
-	newMgr, err := oauth.NewManagerWithScopes(cfg.OAuth.ClientSecrets, cfg.TokensDir(), logger, requiredScopes)
+	newMgr, err := oauth.NewManagerWithScopes(clientSecretsPath, cfg.TokensDir(), logger, requiredScopes)
 	if err != nil {
 		return fmt.Errorf("create oauth manager: %w", err)
 	}
