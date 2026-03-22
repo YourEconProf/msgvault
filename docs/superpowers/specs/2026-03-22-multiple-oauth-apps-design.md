@@ -170,6 +170,7 @@ Callers read `source.OAuthApp` (converting `NullString` to `string`, where null 
 
 **Command-specific notes:**
 
+- **`sync-full` and `sync` "unknown email" bootstrap**: Today, if the user passes an email not yet in the DB, these commands assume Gmail and proceed with the single OAuth manager. With named apps, there's no `sources.oauth_app` to look up. **Resolution:** when no source row exists, fall back to the default OAuth app (`[oauth].client_secrets`). If no default is configured, return an error telling the user to run `add-account <email> --oauth-app <name>` first. This is acceptable because the bootstrap path is a legacy convenience — the documented workflow is `add-account` then `sync`, and named-app users must use `add-account --oauth-app` anyway to establish the binding.
 - **`serve`**: Currently creates a single `oauthMgr` eagerly and passes it into `runScheduledSync`. Must change to pass the cache (or a resolver function) so each scheduled account resolves its own manager. The scheduler receives an email string, so it needs to look up the source's `oauth_app` from the DB. **Fallback for missing source rows:** `serve` currently supports scheduled accounts that don't yet have a `sources` row (token uploaded first, account registered lazily via `GetOrCreateSource` during sync). When no source row exists, the resolver must fall back to the default OAuth app (`[oauth].client_secrets`). If no default is configured either, skip the account with a warning. This preserves the existing "upload token first" workflow while giving named-app users the correct resolution path once their accounts are registered.
 - **`deletions`**: Uses `oauth.NewManagerWithScopes` with variable scopes (escalating to full access for `batchDelete`). The lazy cache should not be shared with the standard-scopes cache. Deletions already create their own manager instances per scope set — keep that pattern, just resolve the correct `client_secrets` path via `ClientSecretsFor`.
 
@@ -185,7 +186,7 @@ If a user re-auths an account with a different OAuth app, the new token overwrit
 - **CLAUDE.md**: update the config example in the Configuration section.
 - **`add-account` help text**: document the `--oauth-app` flag.
 - **Setup wizard** (`setup.go`): no change for now (it handles the single-app path; multi-app is an advanced config).
-- **Headless instructions**: no change (token copying is app-agnostic).
+- **Headless instructions** (`PrintHeadlessInstructions` in `oauth.go`): must accept an optional OAuth app name and include `--oauth-app <name>` in the printed commands when set. Both the browser-side step ("on a machine with a browser, run `msgvault add-account <email> --oauth-app <name>`") and the server-side step ("on the headless server, run `msgvault add-account <email> --oauth-app <name>`") need the flag, or headless setup will fail for org-bound accounts. The `add-account --headless` codepath must pass the `--oauth-app` value through to `PrintHeadlessInstructions`.
 - **Error messages**: update `errOAuthNotConfigured()` and `oauthSetupHint()` to mention named apps when the user has `[oauth.apps]` configured.
 
 ## Scope
