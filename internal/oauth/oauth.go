@@ -112,10 +112,15 @@ func (m *Manager) HasToken(email string) bool {
 // Google's device flow does not support Gmail scopes, so users must authorize
 // on a machine with a browser and copy the token file.
 // tokensDir should be the configured tokens directory (e.g., cfg.TokensDir()).
-func PrintHeadlessInstructions(email, tokensDir string) {
+func PrintHeadlessInstructions(email, tokensDir, oauthApp string) {
 	// Use same sanitization as tokenPath for consistency
 	tokenFile := sanitizeEmail(email) + ".json"
 	tokenPath := filepath.Join(tokensDir, tokenFile)
+
+	addCmd := fmt.Sprintf("    msgvault add-account %s", email)
+	if oauthApp != "" {
+		addCmd += fmt.Sprintf(" --oauth-app %s", oauthApp)
+	}
 
 	fmt.Println()
 	fmt.Println("=== Headless Server Setup ===")
@@ -126,7 +131,7 @@ func PrintHeadlessInstructions(email, tokensDir string) {
 	fmt.Println()
 	fmt.Println("Step 1: On a machine with a browser, run:")
 	fmt.Println()
-	fmt.Printf("    msgvault add-account %s\n", email)
+	fmt.Println(addCmd)
 	fmt.Println()
 	fmt.Println("Step 2: Copy the token file to your headless server:")
 	fmt.Println()
@@ -135,7 +140,7 @@ func PrintHeadlessInstructions(email, tokensDir string) {
 	fmt.Println()
 	fmt.Println("Step 3: On the headless server, register the account:")
 	fmt.Println()
-	fmt.Printf("    msgvault add-account %s\n", email)
+	fmt.Println(addCmd)
 	fmt.Println()
 	fmt.Println("The token will be detected and the account registered. No browser needed.")
 	fmt.Println("All msgvault commands (sync, tui, etc.) will work normally.")
