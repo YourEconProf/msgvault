@@ -65,12 +65,13 @@ Examples:
 			Username: imapUsername,
 		}
 
-		// Read password: prompt renders to stderr (it's UI, not
-		// program output) so stdout redirection never captures
-		// escape sequences.
-		//  - huh masked input when stdin + stderr are terminals
+		// Read password: pick the best available method based on
+		// which file descriptors are terminals.
+		//  - huh masked input when stdin + an output stream are TTYs
+		//    (prefer stderr to keep stdout clean; fall back to stdout
+		//    when stderr is redirected)
 		//  - term.ReadPassword when stdin is a native terminal but
-		//    stderr is redirected (doesn't need a TTY for output)
+		//    no output TTY is available (works without output)
 		//  - plain pipe read when stdin is not a terminal
 		var (
 			password string
@@ -81,12 +82,25 @@ Examples:
 			isatty.IsCygwinTerminal(os.Stdin.Fd())
 		stderrTTY := isatty.IsTerminal(os.Stderr.Fd()) ||
 			isatty.IsCygwinTerminal(os.Stderr.Fd())
+		stdoutTTY := isatty.IsTerminal(os.Stdout.Fd()) ||
+			isatty.IsCygwinTerminal(os.Stdout.Fd())
+
+		// Prefer stderr for prompt output (keeps stdout clean for
+		// callers that capture program output); fall back to stdout
+		// when stderr is redirected (e.g. 2>errors.log).
+		var promptOut *os.File
+		switch {
+		case stderrTTY:
+			promptOut = os.Stderr
+		case stdoutTTY:
+			promptOut = os.Stdout
+		}
 
 		switch {
-		case stdinTTY && stderrTTY:
-			password, err = readPasswordInteractive(prompt, os.Stderr)
+		case stdinTTY && promptOut != nil:
+			password, err = readPasswordInteractive(prompt, promptOut)
 		case isatty.IsTerminal(os.Stdin.Fd()):
-			// Native terminal, stderr redirected: term.ReadPassword
+			// Native terminal, no output TTY: term.ReadPassword
 			// suppresses echo without needing a TTY for output.
 			fmt.Fprintf(os.Stderr, "%s ", prompt)
 			raw, readErr := term.ReadPassword(int(os.Stdin.Fd()))
@@ -99,7 +113,7 @@ Examples:
 				password = string(raw)
 			}
 		case stdinTTY:
-			// Cygwin/mintty PTY with stderr redirected:
+			// Cygwin/mintty PTY with no output TTY:
 			// term.ReadPassword doesn't work on Cygwin handles
 			// and huh needs a TTY for output.
 			return fmt.Errorf("cannot read password: no terminal available for prompt (try piping the password via stdin)")
