@@ -404,12 +404,15 @@ func normalizeGmailAddress(email string) string {
 	return local + "@gmail.com"
 }
 
-// tokenFile wraps an OAuth2 token with metadata about the scopes it was
-// authorized with. This enables proactive scope checking (e.g., detecting
-// that deletion requires re-authorization) without making an API call first.
+// tokenFile wraps an OAuth2 token with metadata about the scopes and
+// client it was authorized with. This enables proactive scope checking
+// (e.g., detecting that deletion requires re-authorization) and client
+// identity verification (detecting that an OAuth app switch requires
+// re-authorization) without making an API call first.
 type tokenFile struct {
 	oauth2.Token
-	Scopes []string `json:"scopes,omitempty"`
+	Scopes   []string `json:"scopes,omitempty"`
+	ClientID string   `json:"client_id,omitempty"`
 }
 
 // loadToken loads a saved token for the given email.
@@ -442,6 +445,21 @@ func (m *Manager) loadTokenFile(email string) (*tokenFile, error) {
 	}
 
 	return &tf, nil
+}
+
+// TokenMatchesClient returns true if the stored token for the given email
+// was minted by this manager's OAuth client. Returns false if the token
+// doesn't exist, has no client_id metadata (legacy token), or was minted
+// by a different client.
+func (m *Manager) TokenMatchesClient(email string) bool {
+	tf, err := m.loadTokenFile(email)
+	if err != nil {
+		return false
+	}
+	if tf.ClientID == "" {
+		return false // legacy token without client_id metadata
+	}
+	return tf.ClientID == m.config.ClientID
 }
 
 // HasScopeMetadata returns true if the token file for this account has any
@@ -477,8 +495,9 @@ func (m *Manager) saveToken(email string, token *oauth2.Token, scopes []string) 
 	}
 
 	tf := tokenFile{
-		Token:  *token,
-		Scopes: scopes,
+		Token:    *token,
+		Scopes:   scopes,
+		ClientID: m.config.ClientID,
 	}
 
 	data, err := json.MarshalIndent(tf, "", "  ")

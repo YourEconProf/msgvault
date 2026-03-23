@@ -97,10 +97,13 @@ func TestAddAccount_RebindWithExistingToken(t *testing.T) {
 	if err := os.MkdirAll(tokensDir, 0700); err != nil {
 		t.Fatalf("mkdir tokens: %v", err)
 	}
+	// client_id must match the fake client secrets so
+	// TokenMatchesClient returns true (headless rebind scenario).
 	tokenData, _ := json.Marshal(map[string]string{
 		"access_token":  "fake-access",
 		"refresh_token": "fake-refresh",
 		"token_type":    "Bearer",
+		"client_id":     "test.apps.googleusercontent.com",
 	})
 	tokenPath := filepath.Join(tokensDir, "user@acme.com.json")
 	if err := os.WriteFile(tokenPath, tokenData, 0600); err != nil {

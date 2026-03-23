@@ -273,7 +273,11 @@ func runScheduledSync(ctx context.Context, email string, s *store.Store, getOAut
 	// Look up source to get OAuth app binding. Fall back to default
 	// if no source row exists (token-first workflow).
 	appName := ""
-	if src, _ := findGmailSource(s, email); src != nil {
+	src, srcErr := findGmailSource(s, email)
+	if srcErr != nil {
+		return fmt.Errorf("look up source for %s: %w", email, srcErr)
+	}
+	if src != nil {
 		appName = sourceOAuthApp(src)
 	}
 

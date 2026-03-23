@@ -134,12 +134,14 @@ Examples:
 			}
 		}
 
-		// If a valid token exists and we're not forcing re-auth,
-		// register/update the source and binding without re-authing.
-		// This handles: initial setup (token exists from another machine),
-		// binding changes with existing token (headless rebind), and
-		// the normal "already authorized" case.
-		if !forceReauth && oauthMgr.HasToken(email) {
+		// If a valid token exists, check if we can reuse it.
+		// For binding changes, only reuse if the token was minted by
+		// the new app's client (headless rebind: token copied from a
+		// machine that authorized with the new app). If the token is
+		// from a different client, fall through to re-authorize.
+		tokenReusable := !forceReauth && oauthMgr.HasToken(email) &&
+			(!bindingChanged || oauthMgr.TokenMatchesClient(email))
+		if tokenReusable {
 			source, err := s.GetOrCreateSource("gmail", email)
 			if err != nil {
 				return fmt.Errorf("create source: %w", err)
