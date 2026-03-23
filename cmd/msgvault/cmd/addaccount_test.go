@@ -187,6 +187,84 @@ func TestAddAccount_RebindWithExistingToken(t *testing.T) {
 
 // TestAddAccount_ForceRebindPreservesBindingOnFailure verifies that
 // --force --oauth-app with a cancelled auth does not update the binding.
+// TestAddAccount_NewRegistrationRejectsMismatchedToken verifies that
+// add-account --oauth-app with no existing source row rejects a token
+// minted by a different OAuth client (forces re-auth, not silent accept).
+func TestAddAccount_NewRegistrationRejectsMismatchedToken(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Write a token with a DIFFERENT client_id than the fake secrets
+	tokensDir := filepath.Join(tmpDir, "tokens")
+	if err := os.MkdirAll(tokensDir, 0700); err != nil {
+		t.Fatalf("mkdir tokens: %v", err)
+	}
+	tokenData, _ := json.Marshal(map[string]string{
+		"access_token":  "fake-access",
+		"refresh_token": "fake-refresh",
+		"token_type":    "Bearer",
+		"client_id":     "wrong-client.apps.googleusercontent.com",
+	})
+	if err := os.WriteFile(
+		filepath.Join(tokensDir, "new@acme.com.json"),
+		tokenData, 0600,
+	); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	secretsPath := filepath.Join(tmpDir, "secret.json")
+	if err := os.WriteFile(
+		secretsPath, []byte(fakeClientSecrets), 0600,
+	); err != nil {
+		t.Fatalf("write secrets: %v", err)
+	}
+
+	savedCfg := cfg
+	savedLogger := logger
+	savedOAuthApp := oauthAppName
+	defer func() {
+		cfg = savedCfg
+		logger = savedLogger
+		oauthAppName = savedOAuthApp
+	}()
+
+	cfg = &config.Config{
+		HomeDir: tmpDir,
+		Data:    config.DataConfig{DataDir: tmpDir},
+		OAuth: config.OAuthConfig{
+			Apps: map[string]config.OAuthApp{
+				"acme": {ClientSecrets: secretsPath},
+			},
+		},
+	}
+	logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	// Pre-cancel so if it falls through to Authorize, it fails fast
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	testCmd := &cobra.Command{
+		Use:  "add-account <email>",
+		Args: cobra.ExactArgs(1),
+		RunE: addAccountCmd.RunE,
+	}
+	testCmd.Flags().StringVar(&oauthAppName, "oauth-app", "", "")
+	testCmd.Flags().BoolVar(&headless, "headless", false, "")
+	testCmd.Flags().BoolVar(&forceReauth, "force", false, "")
+	testCmd.Flags().StringVar(&accountDisplayName, "display-name", "", "")
+
+	root := newTestRootCmd()
+	root.AddCommand(testCmd)
+	root.SetArgs([]string{
+		"add-account", "new@acme.com", "--oauth-app", "acme",
+	})
+
+	// Should fail: token exists but from wrong client, auth cancelled
+	err := root.ExecuteContext(ctx)
+	if err == nil {
+		t.Fatal("expected error: mismatched token should not be silently accepted")
+	}
+}
+
 func TestAddAccount_ForceRebindPreservesBindingOnFailure(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := filepath.Join(tmpDir, "msgvault.db")

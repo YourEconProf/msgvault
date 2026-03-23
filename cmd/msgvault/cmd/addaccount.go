@@ -135,12 +135,13 @@ Examples:
 		}
 
 		// If a valid token exists, check if we can reuse it.
-		// For binding changes, only reuse if the token was minted by
-		// the new app's client (headless rebind: token copied from a
-		// machine that authorized with the new app). If the token is
-		// from a different client, fall through to re-authorize.
+		// When --oauth-app is explicitly set (binding change or first
+		// registration), verify the token was minted by that app's
+		// client. A mismatched token would fail on next refresh.
+		needsClientCheck := bindingChanged ||
+			(oauthAppExplicit && resolvedApp != "")
 		tokenReusable := !forceReauth && oauthMgr.HasToken(email) &&
-			(!bindingChanged || oauthMgr.TokenMatchesClient(email))
+			(!needsClientCheck || oauthMgr.TokenMatchesClient(email))
 		if tokenReusable {
 			source, err := s.GetOrCreateSource("gmail", email)
 			if err != nil {
