@@ -45,6 +45,25 @@ Examples:
 			return fmt.Errorf("--headless and --force cannot be used together: --force requires browser-based OAuth which is not available in headless mode")
 		}
 
+		// For --headless, try to inherit the stored binding so the
+		// printed instructions include --oauth-app. DB errors are
+		// non-fatal since headless only prints instructions.
+		if headless {
+			app := oauthAppName
+			if app == "" {
+				if s, openErr := store.Open(cfg.DatabaseDSN()); openErr == nil {
+					defer func() { _ = s.Close() }()
+					if initErr := s.InitSchema(); initErr == nil {
+						if src, _ := findGmailSource(s, email); src != nil {
+							app = sourceOAuthApp(src)
+						}
+					}
+				}
+			}
+			oauth.PrintHeadlessInstructions(email, cfg.TokensDir(), app)
+			return nil
+		}
+
 		// Resolve which client secrets to use
 		resolvedApp := oauthAppName
 		oauthAppExplicit := cmd.Flags().Changed("oauth-app")
@@ -70,16 +89,9 @@ Examples:
 
 		// Inherit stored binding when --oauth-app is not specified.
 		// This ensures re-running add-account on a named-app account
-		// (e.g., after token loss or --headless) uses the correct credentials.
+		// (e.g., after token loss) uses the correct credentials.
 		if !oauthAppExplicit && existingSource != nil && existingSource.OAuthApp.Valid {
 			resolvedApp = existingSource.OAuthApp.String
-		}
-
-		// For --headless, show instructions with the resolved app name
-		// (inherited from DB if not explicitly provided).
-		if headless {
-			oauth.PrintHeadlessInstructions(email, cfg.TokensDir(), resolvedApp)
-			return nil
 		}
 
 		// Detect binding change: --oauth-app was explicitly set and
