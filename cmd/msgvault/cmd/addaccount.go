@@ -135,11 +135,10 @@ Examples:
 		}
 
 		// If a valid token exists, check if we can reuse it.
-		// When --oauth-app is explicitly set (binding change or first
-		// registration), verify the token was minted by that app's
-		// client. A mismatched token would fail on next refresh.
-		needsClientCheck := bindingChanged ||
-			(oauthAppExplicit && resolvedApp != "")
+		// When --oauth-app is explicitly set (any value including empty),
+		// verify the token was minted by the resolved app's client.
+		// A mismatched token would fail on next refresh.
+		needsClientCheck := bindingChanged || oauthAppExplicit
 		tokenReusable := !forceReauth && oauthMgr.HasToken(email) &&
 			(!needsClientCheck || oauthMgr.TokenMatchesClient(email))
 		if tokenReusable {
