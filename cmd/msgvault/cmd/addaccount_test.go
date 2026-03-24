@@ -392,14 +392,19 @@ func TestAddAccount_ExplicitDefaultAcceptsMatchingToken(t *testing.T) {
 	testCmd.Flags().BoolVar(&forceReauth, "force", false, "")
 	testCmd.Flags().StringVar(&accountDisplayName, "display-name", "", "")
 
+	// Pre-cancel so if regression causes auth attempt, it fails fast
+	// instead of opening a browser.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
 	root := newTestRootCmd()
 	root.AddCommand(testCmd)
 	root.SetArgs([]string{
 		"add-account", "user@example.com", "--oauth-app", "",
 	})
 
-	// Should succeed: token's client_id matches default secrets
-	err := root.Execute()
+	// Should succeed: token's client_id matches, no auth needed
+	err := root.ExecuteContext(ctx)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
