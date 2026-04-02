@@ -1,6 +1,7 @@
 package pst
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -24,7 +25,7 @@ func init() {
 // windowsFiletimeToTime converts a Windows FILETIME value (100-nanosecond
 // intervals since 1601-01-01 UTC) to a time.Time. Returns zero time if ft == 0.
 func windowsFiletimeToTime(ft int64) time.Time {
-	if ft == 0 {
+	if ft <= 0 {
 		return time.Time{}
 	}
 	// 11644473600 seconds between Windows epoch (1601-01-01) and Unix epoch (1970-01-01).
@@ -243,9 +244,17 @@ func ReadAttachments(msg *pstlib.Message, maxBytes int64) ([]AttachmentEntry, er
 			mimeType = "application/octet-stream"
 		}
 
+		// Pre-check: skip remaining attachments if this one would exceed the limit.
+		if maxBytes > 0 {
+			estimatedSize := int64(att.GetAttachSize())
+			if estimatedSize > 0 && totalBytes+estimatedSize > maxBytes {
+				break
+			}
+		}
+
 		// Stream attachment content into a buffer.
-		var buf strings.Builder
-		written, err := att.WriteTo((*stringBuilderWriter)(&buf))
+		var buf bytes.Buffer
+		written, err := att.WriteTo(&buf)
 		if err != nil {
 			return nil, fmt.Errorf("read attachment %q: %w", filename, err)
 		}
@@ -261,7 +270,7 @@ func ReadAttachments(msg *pstlib.Message, maxBytes int64) ([]AttachmentEntry, er
 			MIMEType:  mimeType,
 			ContentID: att.GetAttachContentId(),
 			Size:      att.GetAttachSize(),
-			Content:   []byte(buf.String()),
+			Content:   buf.Bytes(),
 		})
 	}
 
@@ -287,11 +296,4 @@ func extractCN(dn string) string {
 		}
 	}
 	return dn
-}
-
-// stringBuilderWriter adapts strings.Builder to io.Writer.
-type stringBuilderWriter strings.Builder
-
-func (w *stringBuilderWriter) Write(p []byte) (int, error) {
-	return (*strings.Builder)(w).Write(p)
 }

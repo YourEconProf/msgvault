@@ -7,6 +7,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/textproto"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -78,16 +79,18 @@ func BuildRFC5322(msg *MessageEntry, attachments []AttachmentEntry) ([]byte, err
 			if ct == "" {
 				ct = "application/octet-stream"
 			}
-			if att.Filename != "" {
-				ah.Set("Content-Type", mime.FormatMediaType(ct, map[string]string{"name": att.Filename}))
+			fname := sanitizeFilename(att.Filename)
+			if fname != "" {
+				ah.Set("Content-Type", mime.FormatMediaType(ct, map[string]string{"name": fname}))
 			} else {
 				ah.Set("Content-Type", ct)
 			}
 			if att.ContentID != "" {
-				ah.Set("Content-Id", "<"+att.ContentID+">")
-				ah.Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", att.Filename))
+				cid := sanitizeContentID(att.ContentID)
+				ah.Set("Content-Id", "<"+cid+">")
+				ah.Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", fname))
 			} else {
-				ah.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", att.Filename))
+				ah.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fname))
 			}
 			ah.Set("Content-Transfer-Encoding", "base64")
 			pw, _ := mw.CreatePart(ah)
@@ -204,7 +207,7 @@ func writeSynthesizedHeaders(buf *bytes.Buffer, msg *MessageEntry) {
 	}
 
 	if msg.MessageID != "" {
-		mid := msg.MessageID
+		mid := sanitizeHeaderValue(msg.MessageID)
 		if !strings.HasPrefix(mid, "<") {
 			mid = "<" + mid + ">"
 		}
@@ -212,7 +215,7 @@ func writeSynthesizedHeaders(buf *bytes.Buffer, msg *MessageEntry) {
 	}
 
 	if msg.InReplyTo != "" {
-		irt := msg.InReplyTo
+		irt := sanitizeHeaderValue(msg.InReplyTo)
 		if !strings.HasPrefix(irt, "<") {
 			irt = "<" + irt + ">"
 		}
@@ -220,7 +223,7 @@ func writeSynthesizedHeaders(buf *bytes.Buffer, msg *MessageEntry) {
 	}
 
 	if msg.References != "" {
-		writeHeader(buf, "References", msg.References)
+		writeHeader(buf, "References", sanitizeHeaderValue(msg.References))
 	}
 
 	writeHeader(buf, "X-Msgvault-Source", "pst")
@@ -234,8 +237,50 @@ func writeHeader(buf *bytes.Buffer, name, value string) {
 	buf.WriteString("\r\n")
 }
 
+// sanitizeHeaderValue strips CR and LF characters to prevent header injection.
+func sanitizeHeaderValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\r' || r == '\n' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// sanitizeFilename strips path components and dangerous characters from
+// attachment filenames sourced from PST data. Handles both Unix and Windows
+// path separators since PST data originates on Windows.
+func sanitizeFilename(name string) string {
+	// Normalize Windows backslash separators before calling filepath.Base.
+	name = strings.ReplaceAll(name, `\`, "/")
+	name = filepath.Base(name)
+	if name == "." {
+		return ""
+	}
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+}
+
+// sanitizeContentID strips characters that could break the Content-Id
+// angle-bracket wrapper.
+func sanitizeContentID(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '<', '>', '\r', '\n':
+			return -1
+		default:
+			return r
+		}
+	}, s)
+}
+
 // formatAddr formats a display name + email as "Name <email>" or just email.
 func formatAddr(name, email string) string {
+	email = sanitizeHeaderValue(email)
 	if name == "" && email == "" {
 		return ""
 	}
@@ -265,11 +310,28 @@ func formatDisplayList(display string) string {
 
 // writeQP writes s as quoted-printable text to dst.
 // Lines longer than 76 characters are soft-wrapped with "=\r\n".
+// Trailing whitespace before line breaks is encoded per RFC 2045 §6.7.
 func writeQP(dst interface{ Write([]byte) (int, error) }, s string) {
 	const maxLine = 76
 	var line strings.Builder
 
+	encodeTrailingWS := func() {
+		str := line.String()
+		if len(str) == 0 {
+			return
+		}
+		last := str[len(str)-1]
+		if last == ' ' || last == '\t' {
+			line.Reset()
+			line.WriteString(str[:len(str)-1])
+			line.WriteString(fmt.Sprintf("=%02X", last))
+		}
+	}
+
 	flush := func(soft bool) {
+		if !soft {
+			encodeTrailingWS()
+		}
 		if soft {
 			_, _ = dst.Write([]byte(line.String() + "=\r\n"))
 		} else {

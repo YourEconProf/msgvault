@@ -1,6 +1,7 @@
 package pst
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,11 @@ func TestWindowsFiletimeToTime(t *testing.T) {
 			// (2024-01-15T10:30:00 UTC - 1601-01-01) in 100ns intervals
 			ft:   133497882000000000,
 			want: time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+		},
+		{
+			name: "negative",
+			ft:   -1,
+			want: time.Time{},
 		},
 	}
 
@@ -193,6 +199,79 @@ func TestBuildRFC5322_EmptyBody(t *testing.T) {
 	s := string(raw)
 	if !strings.Contains(s, "text/plain") {
 		t.Error("expected text/plain even for empty body")
+	}
+}
+
+func TestSanitizeHeaderValue(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"normal@example.com", "normal@example.com"},
+		{"evil@example.com\r\nBcc: victim@evil.com", "evil@example.comBcc: victim@evil.com"},
+		{"has\nnewline", "hasnewline"},
+		{"has\rreturn", "hasreturn"},
+	}
+	for _, tt := range tests {
+		got := sanitizeHeaderValue(tt.in)
+		if got != tt.want {
+			t.Errorf("sanitizeHeaderValue(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestBuildRFC5322_HeaderInjection(t *testing.T) {
+	msg := &MessageEntry{
+		EntryID:     "1",
+		SenderEmail: "evil@example.com\r\nBcc: victim@evil.com",
+		Subject:     "Test",
+		BodyText:    "body",
+	}
+	raw, err := BuildRFC5322(msg, nil)
+	if err != nil {
+		t.Fatalf("BuildRFC5322: %v", err)
+	}
+	// Check that "Bcc:" does not appear as a separate header line (the actual
+	// injection vector). A sanitized value may still contain "Bcc:" as a
+	// substring within the From address, but not as a new header line.
+	if strings.Contains(string(raw), "\r\nBcc:") {
+		t.Error("header injection: Bcc header was injected via SenderEmail")
+	}
+}
+
+func TestSanitizeFilename(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"report.pdf", "report.pdf"},
+		{"../../etc/passwd", "passwd"},
+		{`C:\Users\evil\payload.exe`, "payload.exe"},
+		{"file\x00name.txt", "filename.txt"},
+		{"normal.doc", "normal.doc"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		got := sanitizeFilename(tt.in)
+		if got != tt.want {
+			t.Errorf("sanitizeFilename(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestSanitizeContentID(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"abc123@example.com", "abc123@example.com"},
+		{"<injected>header\r\n", "injectedheader"},
+	}
+	for _, tt := range tests {
+		got := sanitizeContentID(tt.in)
+		if got != tt.want {
+			t.Errorf("sanitizeContentID(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestWriteQP_TrailingSpace(t *testing.T) {
+	var buf bytes.Buffer
+	writeQP(&buf, "hello \nworld")
+	got := buf.String()
+	if !strings.Contains(got, "hello=20\r\n") {
+		t.Errorf("trailing space not encoded: got %q", got)
 	}
 }
 

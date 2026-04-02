@@ -243,6 +243,25 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 
 	summary.FoldersTotal = len(folders)
 
+	// Validate resume folder still matches.
+	if summary.WasResumed && resume.FolderIndex > 0 {
+		if resume.FolderIndex >= len(folders) {
+			log.Warn("resume folder index out of range; restarting from beginning",
+				"saved_index", resume.FolderIndex,
+				"folder_count", len(folders),
+			)
+			resume.FolderIndex = 0
+			resume.MsgIndex = 0
+		} else if folders[resume.FolderIndex].Entry.Path != resume.FolderPath {
+			log.Warn("resume folder path mismatch; restarting from beginning",
+				"saved_path", resume.FolderPath,
+				"actual_path", folders[resume.FolderIndex].Entry.Path,
+			)
+			resume.FolderIndex = 0
+			resume.MsgIndex = 0
+		}
+	}
+
 	// Batching constants (same as MBOX/EMLX importers).
 	const (
 		batchSize  = 200
@@ -278,7 +297,7 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 		}
 	}
 
-	flushPending := func(labelIDs map[string]int64) (stop bool) {
+	flushPending := func() (stop bool) {
 		if len(pending) == 0 {
 			return false
 		}
@@ -377,6 +396,10 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 		clear(pending)
 		pending = pending[:0]
 		pendingBytes = 0
+		// Reset checkpoint blocking so future successful batches can checkpoint.
+		// checkpointBlocked is set when an ingest error occurs within a batch;
+		// once the batch completes, we allow checkpointing again.
+		checkpointBlocked = false
 		return false
 	}
 
@@ -500,7 +523,7 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 			pendingBytes += int64(len(raw))
 
 			if len(pending) >= batchSize || pendingBytes >= batchBytes {
-				if stop := flushPending(labelCache); stop {
+				if stop := flushPending(); stop {
 					summary.HardErrors = hardErrors
 					return summary, nil
 				}
@@ -515,7 +538,7 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 	}
 
 	// Flush any remaining messages.
-	if stop := flushPending(labelCache); stop {
+	if stop := flushPending(); stop {
 		summary.HardErrors = hardErrors
 		return summary, nil
 	}

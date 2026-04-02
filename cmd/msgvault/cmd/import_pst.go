@@ -81,6 +81,11 @@ Examples:
 						cancel()
 						continue
 					}
+					// NOTE: os.Exit bypasses all deferred cleanup (db.Close,
+					// pstFile.Close, etc.). This is deliberate: the first
+					// Ctrl+C already triggered graceful shutdown with checkpoint
+					// saving via context cancellation. SQLite WAL journaling
+					// ensures database consistency even on hard exit.
 					fmt.Fprintln(cmd.ErrOrStderr(), "Interrupted again. Exiting immediately.")
 					os.Exit(130)
 				}
