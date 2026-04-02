@@ -400,6 +400,7 @@ func (s *Server) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
 type tokenFile struct {
 	oauth2.Token
 	Scopes   []string `json:"scopes,omitempty"`
+	TenantID string   `json:"tenant_id,omitempty"`
 	ClientID string   `json:"client_id,omitempty"`
 }
 
