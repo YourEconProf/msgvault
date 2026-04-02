@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -16,9 +17,10 @@ import (
 )
 
 func TestTokenPath(t *testing.T) {
-	m := &Manager{tokensDir: "/tmp/tokens"}
+	dir := filepath.Join("tmp", "tokens")
+	m := &Manager{tokensDir: dir}
 	path := m.TokenPath("user@example.com")
-	want := "/tmp/tokens/microsoft_user@example.com.json"
+	want := filepath.Join(dir, "microsoft_user@example.com.json")
 	if path != want {
 		t.Errorf("TokenPath = %q, want %q", path, want)
 	}
@@ -52,14 +54,16 @@ func TestSaveAndLoadToken(t *testing.T) {
 		t.Errorf("Scopes len = %d, want 2", len(loaded.Scopes))
 	}
 
-	// Verify file permissions
-	path := m.TokenPath("user@example.com")
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("permissions = %o, want 0600", info.Mode().Perm())
+	// Verify file permissions (Unix only; Windows ignores POSIX bits).
+	if runtime.GOOS != "windows" {
+		path := m.TokenPath("user@example.com")
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Errorf("permissions = %o, want 0600", info.Mode().Perm())
+		}
 	}
 }
 
@@ -1064,6 +1068,9 @@ func TestTokenSource_PreMigrationTokenGetsTenantBinding(t *testing.T) {
 }
 
 func TestTokenSource_SaveFailureReturnsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("read-only directory does not prevent file creation on Windows")
+	}
 	// Verify saveToken returns an error when the tokens directory is read-only.
 	dir := t.TempDir()
 	m := &Manager{tokensDir: dir, logger: slog.Default()}
