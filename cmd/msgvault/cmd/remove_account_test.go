@@ -301,6 +301,46 @@ func TestRemoveAccountCmd_NonGmailSkipsToken(t *testing.T) {
 	}
 }
 
+func TestResolveSource_IMAPDisplayName(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := tmpDir + "/msgvault.db"
+
+	s, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := s.InitSchema(); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+
+	// Create an IMAP source whose identifier is a URL, display_name is the email.
+	src, err := s.GetOrCreateSource("imap", "imaps://user%40outlook.com@outlook.office365.com:993")
+	if err != nil {
+		t.Fatalf("create source: %v", err)
+	}
+	if err := s.UpdateSourceDisplayName(src.ID, "user@outlook.com"); err != nil {
+		t.Fatalf("set display name: %v", err)
+	}
+	_ = s.Close()
+
+	s2, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatalf("reopen store: %v", err)
+	}
+	if err := s2.InitSchema(); err != nil {
+		t.Fatalf("reinit schema: %v", err)
+	}
+	defer func() { _ = s2.Close() }()
+
+	found, err := resolveSource(s2, "user@outlook.com", "")
+	if err != nil {
+		t.Fatalf("resolveSource by display name: %v", err)
+	}
+	if found.Identifier != "imaps://user%40outlook.com@outlook.office365.com:993" {
+		t.Errorf("got identifier %q, want IMAP URL", found.Identifier)
+	}
+}
+
 func TestRemoveAccountCmd_ClosedStdinReturnsError(t *testing.T) {
 	tmpDir := t.TempDir()
 	dbPath := tmpDir + "/msgvault.db"

@@ -400,6 +400,7 @@ func (s *Server) handleSchedulerStatus(w http.ResponseWriter, r *http.Request) {
 type tokenFile struct {
 	oauth2.Token
 	Scopes   []string `json:"scopes,omitempty"`
+	TenantID string   `json:"tenant_id,omitempty"`
 	ClientID string   `json:"client_id,omitempty"`
 }
 
@@ -469,7 +470,7 @@ func (s *Server) handleUploadToken(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
+		os.Remove(tmpPath)
 		writeError(w, http.StatusInternalServerError, "internal_error", "Failed to write token")
 		return
 	}

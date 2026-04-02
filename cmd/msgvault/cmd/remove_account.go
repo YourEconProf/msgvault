@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 	imaplib "github.com/wesm/msgvault/internal/imap"
+	"github.com/wesm/msgvault/internal/microsoft"
 	"github.com/wesm/msgvault/internal/oauth"
 	"github.com/wesm/msgvault/internal/store"
 )
@@ -130,14 +131,45 @@ func runRemoveAccount(cmd *cobra.Command, args []string) error {
 			)
 		}
 	case "imap":
-		credPath := imaplib.CredentialsPath(
-			cfg.TokensDir(), source.Identifier,
-		)
-		if err := os.Remove(credPath); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr,
-				"Warning: could not remove credentials file %s: %v\n",
-				credPath, err,
+		if source.SyncConfig.Valid && source.SyncConfig.String != "" {
+			imapCfg, parseErr := imaplib.ConfigFromJSON(source.SyncConfig.String)
+			if parseErr == nil {
+				switch imapCfg.EffectiveAuthMethod() {
+				case imaplib.AuthXOAuth2:
+					msMgr := microsoft.NewManager(
+						cfg.Microsoft.ClientID,
+						cfg.Microsoft.EffectiveTenantID(),
+						cfg.TokensDir(),
+						logger,
+					)
+					if err := msMgr.DeleteToken(imapCfg.Username); err != nil {
+						fmt.Fprintf(os.Stderr,
+							"Warning: could not remove Microsoft token: %v\n", err,
+						)
+					}
+				default:
+					credPath := imaplib.CredentialsPath(
+						cfg.TokensDir(), source.Identifier,
+					)
+					if err := os.Remove(credPath); err != nil && !os.IsNotExist(err) {
+						fmt.Fprintf(os.Stderr,
+							"Warning: could not remove credentials file %s: %v\n",
+							credPath, err,
+						)
+					}
+				}
+			}
+		} else {
+			// No sync_config — try removing credential file as fallback.
+			credPath := imaplib.CredentialsPath(
+				cfg.TokensDir(), source.Identifier,
 			)
+			if err := os.Remove(credPath); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr,
+					"Warning: could not remove credentials file %s: %v\n",
+					credPath, err,
+				)
+			}
 		}
 	}
 
@@ -168,7 +200,7 @@ func runRemoveAccount(cmd *cobra.Command, args []string) error {
 func resolveSource(
 	s *store.Store, identifier, sourceType string,
 ) (*store.Source, error) {
-	sources, err := s.GetSourcesByIdentifier(identifier)
+	sources, err := s.GetSourcesByIdentifierOrDisplayName(identifier)
 	if err != nil {
 		return nil, fmt.Errorf("look up account: %w", err)
 	}
