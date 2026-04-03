@@ -52,6 +52,16 @@ Examples:
 		if syncLimit < 0 {
 			return fmt.Errorf("--limit must be a non-negative number")
 		}
+		if syncAfter != "" {
+			if _, err := time.Parse("2006-01-02", syncAfter); err != nil {
+				return fmt.Errorf("invalid --after date %q (expected YYYY-MM-DD): %w", syncAfter, err)
+			}
+		}
+		if syncBefore != "" {
+			if _, err := time.Parse("2006-01-02", syncBefore); err != nil {
+				return fmt.Errorf("invalid --before date %q (expected YYYY-MM-DD): %w", syncBefore, err)
+			}
+		}
 
 		// Open database
 		dbPath := cfg.DatabaseDSN()
@@ -221,6 +231,25 @@ func buildAPIClient(ctx context.Context, src *store.Source, getOAuthMgr func(str
 		var opts []imaplib.Option
 		opts = append(opts, imaplib.WithLogger(logger))
 
+		var since, before time.Time
+		if syncAfter != "" {
+			t, err := time.Parse("2006-01-02", syncAfter)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --after date %q (expected YYYY-MM-DD): %w", syncAfter, err)
+			}
+			since = t
+		}
+		if syncBefore != "" {
+			t, err := time.Parse("2006-01-02", syncBefore)
+			if err != nil {
+				return nil, fmt.Errorf("invalid --before date %q (expected YYYY-MM-DD): %w", syncBefore, err)
+			}
+			before = t
+		}
+		if !since.IsZero() || !before.IsZero() {
+			opts = append(opts, imaplib.WithDateFilter(since, before))
+		}
+
 		switch imapCfg.EffectiveAuthMethod() {
 		case imaplib.AuthXOAuth2:
 			if cfg.Microsoft.ClientID == "" {
@@ -258,10 +287,15 @@ func runFullSync(ctx context.Context, s *store.Store, getOAuthMgr func(string) (
 	}
 	defer func() { _ = apiClient.Close() }()
 
-	// Build query from flags (Gmail only).
+	// Build query from flags (Gmail only; IMAP date filters are
+	// handled via WithDateFilter on the client).
 	query := buildSyncQuery()
 	if query != "" && src.SourceType == "imap" {
-		fmt.Printf("Warning: --query/--before/--after are not supported for IMAP sources and will be ignored.\n\n")
+		// --after/--before are handled natively by IMAP SEARCH;
+		// only warn about --query which has no IMAP equivalent.
+		if syncQuery != "" {
+			fmt.Printf("Warning: --query is not supported for IMAP sources and will be ignored.\n\n")
+		}
 		query = ""
 	}
 
