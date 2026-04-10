@@ -1161,18 +1161,17 @@ func (e *SQLiteEngine) buildSearchQueryParts(ctx context.Context, q *search.Quer
 	// Full-text search: use FTS5 if available, fall back to LIKE
 	if len(q.TextTerms) > 0 {
 		if e.hasFTSTable(ctx) {
-			// Use FTS5 for efficient full-text search
+			// Use FTS5 for efficient full-text search.
+			// Prefix matching (*) enables partial word matches.
+			// Multiple terms are AND-ed: all must appear (in any column).
 			ftsJoin = "JOIN messages_fts fts ON fts.rowid = m.id"
-			// Build FTS match expression
 			ftsTerms := make([]string, len(q.TextTerms))
 			for i, term := range q.TextTerms {
-				// Escape special characters for FTS5
+				// Quote all terms to prevent FTS5 special chars
+				// (-, :, (, ), etc.) from being parsed as query syntax.
 				term = strings.ReplaceAll(term, "\"", "\"\"")
-				if strings.Contains(term, " ") {
-					ftsTerms[i] = fmt.Sprintf("\"%s\"", term)
-				} else {
-					ftsTerms[i] = term
-				}
+				term = strings.ReplaceAll(term, "*", "")
+				ftsTerms[i] = fmt.Sprintf("\"%s\"*", term)
 			}
 			conditions = append(conditions, "messages_fts MATCH ?")
 			args = append(args, strings.Join(ftsTerms, " "))

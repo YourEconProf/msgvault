@@ -418,6 +418,38 @@ func escapeILIKE(s string) string {
 	return s
 }
 
+// startsWithWordChar reports whether s begins with a regex word character
+// [a-zA-Z0-9_]. Used to decide whether \b is appropriate as a prefix.
+func startsWithWordChar(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	c := s[0]
+	return (c >= 'a' && c <= 'z') ||
+		(c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') ||
+		c == '_'
+}
+
+// escapeRegex escapes special regex characters for use in DuckDB's regexp_matches function
+func escapeRegex(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	s = strings.ReplaceAll(s, ".", "\\.")
+	s = strings.ReplaceAll(s, "*", "\\*")
+	s = strings.ReplaceAll(s, "+", "\\+")
+	s = strings.ReplaceAll(s, "?", "\\?")
+	s = strings.ReplaceAll(s, "[", "\\[")
+	s = strings.ReplaceAll(s, "]", "\\]")
+	s = strings.ReplaceAll(s, "(", "\\(")
+	s = strings.ReplaceAll(s, ")", "\\)")
+	s = strings.ReplaceAll(s, "{", "\\{")
+	s = strings.ReplaceAll(s, "}", "\\}")
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, "^", "\\^")
+	s = strings.ReplaceAll(s, "$", "\\$")
+	return s
+}
+
 // buildWhereClause builds WHERE conditions for Parquet queries.
 // Column references use msg. prefix to be explicit since aggregate queries join multiple CTEs.
 // buildAggregateSearchConditions builds SQL conditions for a search query in aggregate views.
@@ -438,24 +470,32 @@ func (e *DuckDBEngine) buildAggregateSearchConditions(searchQuery string, keyCol
 
 	// Text terms: always search subject + sender, plus the view's grouping
 	// key columns when provided (e.g., label name in Labels view).
+	// Uses word-boundary regex (\b) for terms starting with word chars.
+	// Terms starting with non-word chars (e.g., +, @, #) skip \b
+	// since it requires a word/non-word transition that fails at
+	// string start or after whitespace.
 	for _, term := range q.TextTerms {
-		termPattern := "%" + escapeILIKE(term) + "%"
+		escaped := escapeRegex(term)
+		regexPattern := "(?i)" + escaped
+		if startsWithWordChar(term) {
+			regexPattern = "(?i)\\b" + escaped
+		}
 		var parts []string
-		parts = append(parts, `msg.subject ILIKE ? ESCAPE '\'`)
-		args = append(args, termPattern)
-		parts = append(parts, `COALESCE(msg.snippet, '') ILIKE ? ESCAPE '\'`)
-		args = append(args, termPattern)
+		parts = append(parts, `regexp_matches(COALESCE(msg.subject, ''), ?)`)
+		args = append(args, regexPattern)
+		parts = append(parts, `regexp_matches(COALESCE(msg.snippet, ''), ?)`)
+		args = append(args, regexPattern)
 		parts = append(parts, `EXISTS (
 			SELECT 1 FROM mr mr_search
 			JOIN p p_search ON p_search.id = mr_search.participant_id
 			WHERE mr_search.message_id = msg.id
 			  AND mr_search.recipient_type = 'from'
-			  AND (p_search.email_address ILIKE ? ESCAPE '\' OR p_search.display_name ILIKE ? ESCAPE '\')
+			  AND (regexp_matches(p_search.email_address, ?) OR regexp_matches(COALESCE(p_search.display_name, ''), ?))
 		)`)
-		args = append(args, termPattern, termPattern)
+		args = append(args, regexPattern, regexPattern)
 		for _, col := range keyColumns {
-			parts = append(parts, col+` ILIKE ? ESCAPE '\'`)
-			args = append(args, termPattern)
+			parts = append(parts, `regexp_matches(COALESCE(`+col+`, ''), ?)`)
+			args = append(args, regexPattern)
 		}
 		conditions = append(conditions, "("+strings.Join(parts, " OR ")+")")
 	}
@@ -2366,18 +2406,24 @@ func (e *DuckDBEngine) buildSearchConditions(q *search.Query, filter MessageFilt
 		args = append(args, filter.TimeRange.Period)
 	}
 
-	// Text search terms - search subject, snippet, and sender fields (fast path)
+	// Text search terms - search subject, snippet, and from fields (fast path).
+	// Use word-boundary regex (\b) for terms starting with word chars.
+	// Terms starting with non-word chars skip \b (see startsWithWordChar).
 	if len(q.TextTerms) > 0 {
 		for _, term := range q.TextTerms {
-			termPattern := "%" + escapeILIKE(term) + "%"
+			escaped := escapeRegex(term)
+			regexPattern := "(?i)" + escaped
+			if startsWithWordChar(term) {
+				regexPattern = "(?i)\\b" + escaped
+			}
 			conditions = append(conditions, `(
-				msg.subject ILIKE ? ESCAPE '\' OR
-				COALESCE(msg.snippet, '') ILIKE ? ESCAPE '\' OR
-				COALESCE(ms.from_email, ds.from_email, '') ILIKE ? ESCAPE '\' OR
-				COALESCE(ms.from_name, ds.from_name, '') ILIKE ? ESCAPE '\' OR
-				COALESCE(ms.from_phone, ds.from_phone, '') ILIKE ? ESCAPE '\'
+				regexp_matches(COALESCE(msg.subject, ''), ?) OR
+				regexp_matches(COALESCE(msg.snippet, ''), ?) OR
+				regexp_matches(COALESCE(ms.from_email, ds.from_email, ''), ?) OR
+				regexp_matches(COALESCE(ms.from_name, ds.from_name, ''), ?) OR
+				regexp_matches(COALESCE(ms.from_phone, ds.from_phone, ''), ?)
 			)`)
-			args = append(args, termPattern, termPattern, termPattern, termPattern, termPattern)
+			args = append(args, regexPattern, regexPattern, regexPattern, regexPattern, regexPattern)
 		}
 	}
 
