@@ -205,9 +205,11 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 		}
 	}
 
-	// Save initial checkpoint.
-	if err := savePstCheckpoint(st, syncID, cpFile, 0, "", 0, &cp); err != nil {
-		log.Warn("failed to save initial checkpoint", "error", err)
+	// Save initial checkpoint only for new syncs; resuming preserves the existing cursor.
+	if !summary.WasResumed {
+		if err := savePstCheckpoint(st, syncID, cpFile, 0, "", 0, &cp); err != nil {
+			log.Warn("failed to save initial checkpoint", "error", err)
+		}
 	}
 
 	// Open PST file.
@@ -243,8 +245,9 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 
 	summary.FoldersTotal = len(folders)
 
-	// Validate resume folder still matches.
-	if summary.WasResumed && resume.FolderIndex > 0 {
+	// Validate resume folder still matches. Check whenever FolderPath is set,
+	// including index 0, so a path change in the first folder is caught.
+	if summary.WasResumed && resume.FolderPath != "" {
 		if resume.FolderIndex >= len(folders) {
 			log.Warn("resume folder index out of range; restarting from beginning",
 				"saved_index", resume.FolderIndex,
@@ -274,6 +277,9 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 		SourceMsgID  string
 		FallbackDate time.Time
 		LabelID      int64
+		FolderIndex  int
+		FolderPath   string
+		MsgIndex     int64
 	}
 
 	var (
@@ -281,16 +287,11 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 		pendingBytes      int64
 		checkpointBlocked bool
 		hardErrors        bool
-		currentFolder     int
 		currentMsgIdx     int64
 	)
 
-	saveCp := func() {
-		folderPath := ""
-		if currentFolder < len(folders) {
-			folderPath = folders[currentFolder].Entry.Path
-		}
-		if err := savePstCheckpoint(st, syncID, cpFile, currentFolder, folderPath, currentMsgIdx, &cp); err != nil {
+	saveCp := func(fi int, fp string, mi int64) {
+		if err := savePstCheckpoint(st, syncID, cpFile, fi, fp, mi, &cp); err != nil {
 			cp.ErrorsCount++
 			summary.Errors++
 			log.Warn("failed to save checkpoint", "error", err)
@@ -323,7 +324,7 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 
 		for _, p := range pending {
 			if ctx.Err() != nil {
-				saveCp()
+				saveCp(p.FolderIndex, p.FolderPath, p.MsgIndex)
 				summary.Duration = time.Since(start)
 				return true
 			}
@@ -341,7 +342,7 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 						}
 					}
 					if !checkpointBlocked && cp.MessagesProcessed%int64(opts.CheckpointInterval) == 0 {
-						saveCp()
+						saveCp(p.FolderIndex, p.FolderPath, p.MsgIndex)
 					}
 					continue
 				}
@@ -389,7 +390,7 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 			}
 
 			if !checkpointBlocked && cp.MessagesProcessed%int64(opts.CheckpointInterval) == 0 {
-				saveCp()
+				saveCp(p.FolderIndex, p.FolderPath, p.MsgIndex)
 			}
 		}
 
@@ -415,7 +416,6 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 		if summary.WasResumed && fi < resume.FolderIndex {
 			continue
 		}
-		currentFolder = fi
 		currentMsgIdx = 0
 
 		entry := fr.Entry
@@ -519,6 +519,9 @@ func ImportPst(ctx context.Context, st *store.Store, pstPath string, opts PstImp
 				SourceMsgID:  sourceMsgID,
 				FallbackDate: fallbackDate,
 				LabelID:      labelID,
+				FolderIndex:  fi,
+				FolderPath:   fr.Entry.Path,
+				MsgIndex:     currentMsgIdx,
 			})
 			pendingBytes += int64(len(raw))
 

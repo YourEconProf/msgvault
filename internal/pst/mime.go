@@ -78,6 +78,8 @@ func BuildRFC5322(msg *MessageEntry, attachments []AttachmentEntry) ([]byte, err
 			ct := att.MIMEType
 			if ct == "" {
 				ct = "application/octet-stream"
+			} else if _, _, err := mime.ParseMediaType(ct); err != nil {
+				ct = "application/octet-stream"
 			}
 			fname := sanitizeFilename(att.Filename)
 			if fname != "" {

@@ -216,6 +216,24 @@ func ExtractMessage(msg *pstlib.Message, folderPath string) *MessageEntry {
 	}
 }
 
+var errAttachmentTooLarge = fmt.Errorf("attachment exceeds size limit")
+
+// limitWriter wraps an io.Writer and returns errAttachmentTooLarge once the
+// remaining byte budget is exhausted.
+type limitWriter struct {
+	w         io.Writer
+	remaining int64
+}
+
+func (lw *limitWriter) Write(p []byte) (int, error) {
+	if int64(len(p)) > lw.remaining {
+		return 0, errAttachmentTooLarge
+	}
+	n, err := lw.w.Write(p)
+	lw.remaining -= int64(n)
+	return n, err
+}
+
 // ReadAttachments reads all attachments from a pstlib.Message into memory.
 // Returns an empty slice (not an error) when there are no attachments.
 // Individual attachment read errors are returned as a non-nil error.
@@ -244,7 +262,8 @@ func ReadAttachments(msg *pstlib.Message, maxBytes int64) ([]AttachmentEntry, er
 			mimeType = "application/octet-stream"
 		}
 
-		// Pre-check: skip remaining attachments if this one would exceed the limit.
+		// Pre-check using the reported size when available; the bounded writer below
+		// enforces the limit unconditionally, covering the size==0 case.
 		if maxBytes > 0 {
 			estimatedSize := int64(att.GetAttachSize())
 			if estimatedSize > 0 && totalBytes+estimatedSize > maxBytes {
@@ -252,16 +271,20 @@ func ReadAttachments(msg *pstlib.Message, maxBytes int64) ([]AttachmentEntry, er
 			}
 		}
 
-		// Stream attachment content into a buffer.
+		// Stream attachment content through a bounded writer so a corrupted or
+		// malicious PST reporting size 0 cannot exhaust memory.
 		var buf bytes.Buffer
-		written, err := att.WriteTo(&buf)
-		if err != nil {
-			return nil, fmt.Errorf("read attachment %q: %w", filename, err)
+		w := io.Writer(&buf)
+		if maxBytes > 0 {
+			w = &limitWriter{w: &buf, remaining: maxBytes - totalBytes}
 		}
-
-		if maxBytes > 0 && totalBytes+written > maxBytes {
-			// Skip remaining attachments when we'd exceed the size limit.
-			break
+		written, err := att.WriteTo(w)
+		if err != nil {
+			// ErrAttachmentTooLarge means we hit the cap; stop reading further attachments.
+			if err == errAttachmentTooLarge {
+				break
+			}
+			return nil, fmt.Errorf("read attachment %q: %w", filename, err)
 		}
 		totalBytes += written
 
