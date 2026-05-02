@@ -1133,6 +1133,50 @@ func (e *SQLiteEngine) GetGmailIDsByFilter(ctx context.Context, filter MessageFi
 	return collectGmailIDs(rows)
 }
 
+// SearchByDomains returns messages where any participant (from, to, cc, or bcc)
+// belongs to one of the given domains. Uses the shared executeSearchQuery
+// path so results carry the same fields as Search/SearchFast (including
+// deleted_at, conversation_title, message_type, and labels).
+func (e *SQLiteEngine) SearchByDomains(ctx context.Context, domains []string, after, before *time.Time, limit, offset int) ([]MessageSummary, error) {
+	if len(domains) == 0 {
+		return nil, nil
+	}
+
+	// Lower-cased placeholders for case-insensitive domain matching.
+	placeholders := make([]string, len(domains))
+	args := make([]interface{}, 0, len(domains)+2)
+	for i, d := range domains {
+		placeholders[i] = "?"
+		args = append(args, strings.ToLower(d))
+	}
+
+	conditions := []string{emailOnlyFilterM}
+	conditions = append(conditions, fmt.Sprintf(`EXISTS (
+		SELECT 1 FROM message_recipients mr_dom
+		JOIN participants p_dom ON p_dom.id = mr_dom.participant_id
+		WHERE mr_dom.message_id = m.id
+		  AND LOWER(p_dom.domain) IN (%s)
+	)`, strings.Join(placeholders, ", ")))
+
+	if after != nil {
+		conditions = append(conditions, "m.sent_at >= ?")
+		args = append(args, after.Format("2006-01-02"))
+	}
+	if before != nil {
+		conditions = append(conditions, "m.sent_at < ?")
+		args = append(args, before.Format("2006-01-02"))
+	}
+
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	return e.executeSearchQuery(ctx, conditions, args, nil, "", limit, offset)
+}
+
 // Search performs a Gmail-style search query.
 // buildSearchQueryParts builds the WHERE conditions, args, joins, and FTS join
 // for a search query. This is shared between Search and SearchFastCount.
