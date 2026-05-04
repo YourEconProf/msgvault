@@ -45,25 +45,6 @@ Examples:
 			return fmt.Errorf("--headless and --force cannot be used together: --force requires browser-based OAuth which is not available in headless mode")
 		}
 
-		// For --headless, try to inherit the stored binding so the
-		// printed instructions include --oauth-app. DB errors are
-		// non-fatal since headless only prints instructions.
-		if headless {
-			app := oauthAppName
-			if !cmd.Flags().Changed("oauth-app") {
-				if s, openErr := store.Open(cfg.DatabaseDSN()); openErr == nil {
-					defer func() { _ = s.Close() }()
-					if initErr := s.InitSchema(); initErr == nil {
-						if src, _ := findGmailSource(s, email); src != nil {
-							app = sourceOAuthApp(src)
-						}
-					}
-				}
-			}
-			oauth.PrintHeadlessInstructions(email, cfg.TokensDir(), app)
-			return nil
-		}
-
 		// Resolve which client secrets to use
 		resolvedApp := oauthAppName
 		oauthAppExplicit := cmd.Flags().Changed("oauth-app")
@@ -107,7 +88,80 @@ Examples:
 			}
 		}
 
-		// Resolve client secrets path
+		saKeyPath := cfg.OAuth.ServiceAccountKeyFor(resolvedApp)
+		if headless {
+			if saKeyPath != "" {
+				return fmt.Errorf("service accounts do not use --headless; run add-account without --headless")
+			}
+			oauth.PrintHeadlessInstructions(email, cfg.TokensDir(), resolvedApp)
+			return nil
+		}
+
+		// Check for service account configuration first
+		if saKeyPath != "" {
+			if forceReauth {
+				return fmt.Errorf("service accounts do not use --force; tokens are minted on demand from the configured service account key")
+			}
+			saMgr, saErr := oauth.NewServiceAccountManager(saKeyPath, oauth.Scopes)
+			if saErr != nil {
+				return fmt.Errorf("service account: %w", saErr)
+			}
+
+			// Validate access by calling Gmail profile API
+			ts, saErr := saMgr.TokenSource(cmd.Context(), email)
+			if saErr != nil {
+				return fmt.Errorf("service account token for %s: %w", email, saErr)
+			}
+			if saErr := oauth.ValidateTokenEmail(cmd.Context(), ts, email); saErr != nil {
+				var mismatch *oauth.TokenMismatchError
+				if errors.As(saErr, &mismatch) {
+					existing, lookupErr := findGmailSource(s, email)
+					if lookupErr != nil {
+						return fmt.Errorf("service account validation failed: %w (also: %v)", saErr, lookupErr)
+					}
+					if existing == nil {
+						return fmt.Errorf(
+							"%w\nIf %s is the primary address, re-add with:\n"+
+								"  msgvault add-account %s",
+							saErr, mismatch.Actual, mismatch.Actual,
+						)
+					}
+				}
+				return fmt.Errorf("service account validation for %s: %w", email, saErr)
+			}
+
+			// Register source
+			source, saErr := s.GetOrCreateSource("gmail", email)
+			if saErr != nil {
+				return fmt.Errorf("create source: %w", saErr)
+			}
+			// Persist the oauth_app binding (set or clear). Mirror the
+			// standard OAuth branch: when --oauth-app was explicitly
+			// changed and resolves to "", clear the stored binding so
+			// later syncs don't keep resolving credentials through the
+			// stale named-app pointer.
+			if resolvedApp != "" {
+				newApp := sql.NullString{String: resolvedApp, Valid: true}
+				if saErr := s.UpdateSourceOAuthApp(source.ID, newApp); saErr != nil {
+					return fmt.Errorf("update oauth app binding: %w", saErr)
+				}
+			} else if bindingChanged {
+				if saErr := s.UpdateSourceOAuthApp(source.ID, sql.NullString{}); saErr != nil {
+					return fmt.Errorf("clear oauth app binding: %w", saErr)
+				}
+			}
+			if accountDisplayName != "" {
+				if saErr := s.UpdateSourceDisplayName(source.ID, accountDisplayName); saErr != nil {
+					return fmt.Errorf("set display name: %w", saErr)
+				}
+			}
+
+			fmt.Printf("Account %s authorized via service account.\n", email)
+			fmt.Println("Next step: msgvault sync-full", email)
+			return nil
+		}
+
+		// Resolve client secrets path (standard OAuth flow)
 		clientSecretsPath, err = cfg.OAuth.ClientSecretsFor(resolvedApp)
 		if err != nil {
 			if !cfg.OAuth.HasAnyConfig() {
